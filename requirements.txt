@@ -1,0 +1,29 @@
+"""Create requirements.txt file"""
+    requirements = """# Chess Engine Deep Learning Project
+# Core Requirements
+
+# PyTorch - Deep Learning Framework
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Chess library
+chess>=1.10.0
+
+# Numerical computing
+numpy>=1.24.0
+
+# Progress bars
+tqdm>=4.65.0
+
+# Optional but recommended
+matplotlib>=3.7.0
+tensorboard>=2.13.0
+pandas>=2.0.0
+scipy>=1.10.0
+
+# For development
+pytest>=7.3.0
+black>=23.3.0
+flake8>=6.0.0
+"""
