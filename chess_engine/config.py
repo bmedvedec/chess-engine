@@ -3,17 +3,17 @@ Configuration file for chess engine project
 """
 
 import torch
-import os
+from pathlib import Path
 
 # Device configuration
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 NUM_WORKERS = 4  # For data loading
 
 # Project paths
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
-MODEL_DIR = os.path.join(PROJECT_ROOT, 'data', 'models')
-LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+DATA_DIR = PROJECT_ROOT / 'data'
+MODEL_DIR = PROJECT_ROOT / 'data' / 'models'
+LOG_DIR = PROJECT_ROOT / 'logs'
 
 # Model architecture
 BOARD_CHANNELS = 20  # Input channels for CNN
