@@ -62,6 +62,160 @@ def test_encoding():
     tensor_flip = DataAugmentation.flip_tensor(encoder.board_to_tensor(board))
     print(f"Tensor flip successful: shape {tensor_flip.shape}")
 
+    # Test 5: Move flipping
+    print("\n5. Testing move flipping (NEW)...")
+    board = chess.Board()
+
+    # Test a few different moves
+    test_moves = [
+        chess.Move.from_uci("e2e4"),  # e-file move
+        chess.Move.from_uci("a2a4"),  # a-file move (should flip to h-file)
+        chess.Move.from_uci("g1f3"),  # Knight move
+        chess.Move.from_uci("b1c3"),  # Knight move
+    ]
+
+    print("\nOriginal moves → Flipped moves:")
+    for move in test_moves:
+        flipped_move = DataAugmentation.flip_move(move)
+        print(f"  {move.uci():6s} → {flipped_move.uci()}")
+
+        # Verify the flip is correct
+        from_file_orig = chess.square_file(move.from_square)
+        to_file_orig = chess.square_file(move.to_square)
+        from_file_flip = chess.square_file(flipped_move.from_square)
+        to_file_flip = chess.square_file(flipped_move.to_square)
+
+        # Files should be mirrored: 0↔7, 1↔6, 2↔5, 3↔4
+        assert from_file_flip == 7 - from_file_orig, f"From file not flipped correctly"
+        assert to_file_flip == 7 - to_file_orig, f"To file not flipped correctly"
+
+        # Ranks should stay the same
+        from_rank_orig = chess.square_rank(move.from_square)
+        to_rank_orig = chess.square_rank(move.to_square)
+        from_rank_flip = chess.square_rank(flipped_move.from_square)
+        to_rank_flip = chess.square_rank(flipped_move.to_square)
+
+        assert from_rank_flip == from_rank_orig, f"From rank changed unexpectedly"
+        assert to_rank_flip == to_rank_orig, f"To rank changed unexpectedly"
+
+    print("✅ All move flips verified correct!")
+
+    # Test 6: Move index flipping
+    print("\n6. Testing move index flipping (NEW)...")
+
+    # Test move index flipping (encoding: from_square * 64 + to_square)
+    test_indices = [
+        (0, "a1a1"),  # Corner square to itself
+        (63, "a1h1"),  # Bottom left to bottom right
+        (4032, "h8a8"),  # Top right to top left
+        (4095, "h8h8"),  # Corner square to itself
+        (260, "e2e4"),  # Common pawn move
+    ]
+
+    print("\nOriginal index → Flipped index:")
+    for move_index, description in test_indices:
+        flipped_index = DataAugmentation.flip_move_index(move_index)
+
+        # Decode to verify
+        from_sq = move_index // 64
+        to_sq = move_index % 64
+        from_sq_flip = flipped_index // 64
+        to_sq_flip = flipped_index % 64
+
+        print(f"  {move_index:4d} ({description}) → {flipped_index:4d}")
+
+        # Verify files are flipped
+        from_file = from_sq % 8
+        to_file = to_sq % 8
+        from_file_flip = from_sq_flip % 8
+        to_file_flip = to_sq_flip % 8
+
+        assert from_file_flip == 7 - from_file, f"From file not flipped"
+        assert to_file_flip == 7 - to_file, f"To file not flipped"
+
+    print("✅ All move index flips verified correct!")
+
+    # Test 7: Consistency between move and move_index flipping
+    print("\n7. Testing consistency between flip_move and flip_move_index...")
+
+    from chess_engine.utils.move_encoder import MoveEncoder
+
+    move_encoder = MoveEncoder()
+
+    board = chess.Board()
+    test_moves = [
+        chess.Move.from_uci("e2e4"),
+        chess.Move.from_uci("d2d4"),
+        chess.Move.from_uci("g1f3"),
+        chess.Move.from_uci("b1c3"),
+    ]
+
+    for move in test_moves:
+        # Method 1: Flip the move object, then encode
+        flipped_move = DataAugmentation.flip_move(move)
+        flipped_index_method1 = move_encoder.encode_move(flipped_move)
+
+        # Method 2: Encode the move, then flip the index
+        original_index = move_encoder.encode_move(move)
+        flipped_index_method2 = DataAugmentation.flip_move_index(original_index)
+
+        # Both methods should give the same result
+        print(
+            f"  {move.uci()}: method1={flipped_index_method1}, method2={flipped_index_method2}"
+        )
+        assert (
+            flipped_index_method1 == flipped_index_method2
+        ), f"Inconsistent flipping for {move.uci()}"
+
+    print("✅ flip_move and flip_move_index are consistent!")
+
+    # Test 8: Round-trip test (flip twice = original)
+    print("\n8. Testing round-trip (flip twice = original)...")
+
+    board = chess.Board()
+    test_moves = [
+        chess.Move.from_uci("e2e4"),
+        chess.Move.from_uci("a2a4"),
+        chess.Move.from_uci("h2h4"),
+    ]
+
+    for move in test_moves:
+        # Flip twice should give original
+        flipped_once = DataAugmentation.flip_move(move)
+        flipped_twice = DataAugmentation.flip_move(flipped_once)
+
+        assert move == flipped_twice, f"Round-trip failed for {move.uci()}"
+        print(f"  {move.uci()} → {flipped_once.uci()} → {flipped_twice.uci()} ✅")
+
+    # Same for move indices
+    for move in test_moves:
+        original_index = move_encoder.encode_move(move)
+        flipped_once = DataAugmentation.flip_move_index(original_index)
+        flipped_twice = DataAugmentation.flip_move_index(flipped_once)
+
+        assert (
+            original_index == flipped_twice
+        ), f"Round-trip failed for index {original_index}"
+
+    print("✅ Round-trip test passed!")
+
+    # Test 9: Promotion moves
+    print("\n9. Testing promotion move flipping...")
+
+    # Create a position where white pawn can promote
+    board = chess.Board("4k3/P7/8/8/8/8/8/4K3 w - - 0 1")
+    promotion_move = chess.Move.from_uci("a7a8q")  # Promote to queen
+
+    flipped_promotion = DataAugmentation.flip_move(promotion_move)
+    print(f"  Original promotion:  {promotion_move.uci()}")
+    print(f"  Flipped promotion:   {flipped_promotion.uci()}")
+
+    # Verify promotion piece is preserved
+    assert (
+        promotion_move.promotion == flipped_promotion.promotion
+    ), "Promotion piece not preserved"
+    print("✅ Promotion moves handled correctly!")
+
     print("\n" + "=" * 80)
     print("✅ ALL ENCODING TESTS PASSED!")
     print("=" * 80)

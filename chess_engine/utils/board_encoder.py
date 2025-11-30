@@ -345,6 +345,55 @@ class DataAugmentation:
         return torch.flip(tensor, dims=[-1])
 
     @staticmethod
+    def flip_move(move: chess.Move) -> chess.Move:
+        """
+        Flip move coordinates horizontally to match flipped board.
+
+        Args:
+            move: Original move
+
+        Returns:
+            Flipped move with horizontally mirrored coordinates
+        """
+        from_rank = chess.square_rank(move.from_square)
+        from_file = chess.square_file(move.from_square)
+        to_rank = chess.square_rank(move.to_square)
+        to_file = chess.square_file(move.to_square)
+
+        # Flip files (a↔h, b↔g, c↔f, d↔e)
+        flipped_from = chess.square(7 - from_file, from_rank)
+        flipped_to = chess.square(7 - to_file, to_rank)
+
+        return chess.Move(flipped_from, flipped_to, move.promotion)
+
+    @staticmethod
+    def flip_move_index(move_index: int) -> int:
+        """
+        Flip move index to match horizontally flipped board.
+
+        Assumes move encoding: from_square * 64 + to_square (4096 possible moves)
+
+        Args:
+            move_index: Original move index (0-4095)
+
+        Returns:
+            Flipped move index with horizontally mirrored coordinates
+        """
+        from_square = move_index // 64
+        to_square = move_index % 64
+
+        # Flip files for both squares
+        from_rank = from_square // 8
+        from_file = from_square % 8
+        to_rank = to_square // 8
+        to_file = to_square % 8
+
+        flipped_from = from_rank * 8 + (7 - from_file)
+        flipped_to = to_rank * 8 + (7 - to_file)
+
+        return flipped_from * 64 + flipped_to
+
+    @staticmethod
     def color_swap(board: chess.Board) -> chess.Board:
         """
         Swap colors (white ↔ black) and flip board vertically.
