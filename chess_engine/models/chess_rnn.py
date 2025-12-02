@@ -419,14 +419,19 @@ class ChessLSTM(nn.Module):
 
         # Pack padded sequences if lengths provided
         if lengths is not None:
+            # IMPORTANT: Ensure lengths stay on CPU for pack_padded_sequence
+            # Even if sort might move them to GPU
+            lengths_cpu = lengths.cpu() if lengths.is_cuda else lengths
+
             # Sort by length (required by pack_padded_sequence)
-            sorted_lengths, sorted_idx = torch.sort(lengths, descending=True)
+            sorted_lengths, sorted_idx = torch.sort(lengths_cpu, descending=True)
             _, unsorted_idx = torch.sort(sorted_idx)
 
-            # Sort sequences
-            embedded = embedded[sorted_idx]
+            # Sort sequences (use sorted_idx on correct device)
+            sorted_idx_device = sorted_idx.to(embedded.device)
+            embedded = embedded[sorted_idx_device]
 
-            # Pack
+            # Pack (sorted_lengths is guaranteed to be on CPU)
             packed = nn.utils.rnn.pack_padded_sequence(
                 embedded, sorted_lengths, batch_first=True, enforce_sorted=True
             )
