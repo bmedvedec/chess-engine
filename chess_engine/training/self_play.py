@@ -1,5 +1,5 @@
 """
-CHAPTER 9: SELF-PLAY INFRASTRUCTURE
+SELF-PLAY INFRASTRUCTURE
 
 Generate training data by having the engine play against itself.
 
@@ -447,11 +447,24 @@ def _play_single_game_worker(
     np.random.seed(game_seed)
     torch.manual_seed(game_seed)
 
-    # Load model
+    # Load checkpoint first to get model config
     device = torch.device("cpu")
-    model = HybridChessNet(use_rnn=config_dict["use_rnn"])
-
     checkpoint = torch.load(model_path, map_location=device)
+
+    # Get model architecture from checkpoint or config
+    if "model_config" in checkpoint:
+        model_config = checkpoint["model_config"]
+        cnn_blocks = model_config.get("cnn_residual_blocks", 10)
+        use_rnn = model_config.get("use_rnn", False)
+    else:
+        # Fallback to config dict
+        cnn_blocks = config_dict.get("cnn_blocks", 10)
+        use_rnn = config_dict.get("use_rnn", False)
+
+    # Create model with correct architecture
+    model = HybridChessNet(cnn_residual_blocks=cnn_blocks, use_rnn=use_rnn)
+
+    # Load state dict
     if "model_state_dict" in checkpoint:
         model.load_state_dict(checkpoint["model_state_dict"])
     else:

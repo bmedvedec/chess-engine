@@ -15,10 +15,7 @@ ENV/
 *.pt
 
 # Data
-data/pgn/*.pgn
-data/processed/*.pkl
-data/models/*.pt
-data/selfplay/*.pkl
+data/*
 
 # Logs
 logs/
