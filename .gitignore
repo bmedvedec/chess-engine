@@ -17,6 +17,10 @@ ENV/
 # Data
 data/*
 
+# Results
+results/*
+evaluation_results/*
+
 # Logs
 logs/
 *.log
