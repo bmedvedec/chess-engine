@@ -23,7 +23,7 @@ os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # Disable oneDNN messages
 import time
 import json
 import argparse
-from typing import Optional, Dict, List, Tuple, Any
+from typing import Optional, Dict, List, Tuple, Any, cast
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import traceback
@@ -47,6 +47,22 @@ from chess_engine.training.self_play import (
     SelfPlayConfig,
     ParallelSelfPlayWorker,
 )
+
+
+def _make_json_safe(obj):
+    """Convert numpy types to native Python types for JSON serialization."""
+    import numpy as np
+
+    if isinstance(obj, dict):
+        return {k: _make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_make_json_safe(v) for v in obj]
+    elif hasattr(obj, "item"):  # numpy scalar types have .item() method
+        return obj.item()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
 
 
 @dataclass
@@ -111,12 +127,12 @@ class RLTrainingConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
-        return asdict(self)
+        return cast(Dict[str, Any], _make_json_safe(asdict(self)))
 
     def save(self, filepath: str):
         """Save config to JSON"""
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
