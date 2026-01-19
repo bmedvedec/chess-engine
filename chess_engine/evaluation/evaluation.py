@@ -372,8 +372,48 @@ class ChessEngineEvaluator:
         else:
             cnn_blocks = 10
 
-        # Create model
-        self.model = HybridChessNet(cnn_residual_blocks=cnn_blocks, use_rnn=has_rnn)
+        # Detect RNN parameters from checkpoint if RNN is present
+        rnn_hidden_size = 256  # default
+        rnn_layers = 2  # default
+        rnn_attention = False  # default
+        fusion_type = "gated"  # default
+
+        if has_rnn:
+            # Try to detect RNN hidden size from weight shapes
+            for key in state_dict.keys():
+                if "rnn.lstm.weight_ih_l0" in key:
+                    weight_shape = state_dict[key].shape
+                    rnn_hidden_size = weight_shape[0] // 4  # LSTM has 4 gates
+                    break
+
+            # Detect number of RNN layers
+            rnn_layer_keys = [
+                k for k in state_dict.keys() if k.startswith("rnn.lstm.weight_ih_l")
+            ]
+            if rnn_layer_keys:
+                max_layer = max(int(k.split("_l")[1][0]) for k in rnn_layer_keys)
+                rnn_layers = max_layer + 1
+
+            # Detect attention
+            rnn_attention = any("attention" in key for key in state_dict.keys())
+
+            # Detect fusion type (check for gated fusion layers)
+            if any("fusion.gate" in key for key in state_dict.keys()):
+                fusion_type = "gated"
+            elif any("fusion.attention" in key for key in state_dict.keys()):
+                fusion_type = "attention"
+            else:
+                fusion_type = "concat"
+
+        # Create model with detected parameters
+        self.model = HybridChessNet(
+            cnn_residual_blocks=cnn_blocks,
+            use_rnn=has_rnn,
+            rnn_hidden_size=rnn_hidden_size if has_rnn else 256,
+            rnn_num_layers=rnn_layers if has_rnn else 2,
+            rnn_use_attention=rnn_attention if has_rnn else False,
+            fusion_type=fusion_type if has_rnn else "gated",
+        )
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
         self.model.eval()
@@ -381,8 +421,12 @@ class ChessEngineEvaluator:
         self.has_rnn = has_rnn
 
         if self.verbose:
-            rnn_status = "with RNN" if has_rnn else "CNN-only"
-            print(f"✅ Model loaded ({rnn_status}, {cnn_blocks} blocks)")
+            if has_rnn:
+                print(
+                    f"✅ Model loaded (Hybrid CNN-RNN, {cnn_blocks} CNN blocks, {rnn_layers} RNN layers, hidden={rnn_hidden_size}, attention={rnn_attention}, fusion={fusion_type})"
+                )
+            else:
+                print(f"✅ Model loaded (CNN-only, {cnn_blocks} blocks)")
 
             if self.use_mcts:
                 print(f"✅ MCTS enabled ({self.mcts_simulations} simulations)")

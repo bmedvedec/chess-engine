@@ -23,7 +23,7 @@ os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # Disable oneDNN messages
 import time
 import json
 import argparse
-from typing import Optional, Dict, List, Tuple, Any, cast
+from typing import Optional, Dict, List, Tuple, Any, cast, Union
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import traceback
@@ -34,6 +34,13 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
+
+# Mixed precision imports
+from torch.amp.grad_scaler import GradScaler
+from torch import autocast
+
+AMP_DEVICE = "cuda"
+
 import chess
 from tqdm import tqdm
 
@@ -76,10 +83,12 @@ class RLTrainingConfig:
 
     # Self-play configuration
     num_simulations: int = 200
-    c_puct: float = 1.5
-    temperature: float = 1.0
+    c_puct: float = 2.0
+    temperature: float = 1.5
     temperature_threshold: int = 15
     max_moves_per_game: int = 200
+    dirichlet_alpha: float = 0.3
+    resign_threshold: float = -0.9
 
     # Parallel self-play
     use_parallel_selfplay: bool = True
@@ -116,7 +125,7 @@ class RLTrainingConfig:
     # Checkpointing
     checkpoint_dir: str = "data/rl_checkpoints"
     save_frequency: int = 1  # Save every N iterations
-    keep_checkpoints: int = 5  # Number of checkpoints to keep
+    keep_checkpoints: int = 20  # Number of checkpoints to keep
 
     # Logging
     log_dir: str = "logs/rl_training"
@@ -124,6 +133,7 @@ class RLTrainingConfig:
 
     # Device
     device: str = "cuda"  # 'cuda' or 'cpu'
+    use_amp: bool = True  # Enable mixed precision training (AMP)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -230,6 +240,7 @@ class RLTrainer:
         config: RLTrainingConfig,
         model: Optional[nn.Module] = None,
         resume_from: Optional[str] = None,
+        pretrained_path: Optional[str] = None,
     ):
         """
         Initialize RL trainer.
@@ -256,6 +267,20 @@ class RLTrainer:
             )
         self.model = model.to(self.device)
 
+        # Load pretrained weights (Transfer Learning)
+        if pretrained_path and not resume_from:
+            print(f"\n📥 Loading pretrained weights from: {pretrained_path}")
+            checkpoint = torch.load(pretrained_path, map_location=self.device)
+
+            # Handle different checkpoint formats
+            if "model_state_dict" in checkpoint:
+                state_dict = checkpoint["model_state_dict"]
+            else:
+                state_dict = checkpoint
+
+            self.model.load_state_dict(state_dict)
+            print("   ✅ Weights loaded successfully")
+
         # Best model (for evaluation comparison)
         self.best_model = HybridChessNet(
             cnn_residual_blocks=config.cnn_blocks, use_rnn=config.use_rnn
@@ -273,6 +298,20 @@ class RLTrainer:
         # Loss functions
         self.policy_criterion = nn.CrossEntropyLoss()
         self.value_criterion = nn.MSELoss()
+
+        # Mixed precision training (AMP)
+        self.use_amp = config.use_amp and self.device.type == "cuda"
+
+        # Initialize GradScaler
+        if self.use_amp:
+            self.scaler: Optional[GradScaler] = GradScaler()
+        else:
+            self.scaler = None
+
+        if self.use_amp:
+            print(f"⚡ Mixed Precision (AMP): Enabled")
+        else:
+            print(f"⚠️  Mixed Precision (AMP): Disabled (CPU or manually disabled)")
 
         # Replay buffer
         self.replay_buffer = ReplayBuffer(
@@ -312,6 +351,9 @@ class RLTrainer:
         # Save initial config
         config.save(os.path.join(config.checkpoint_dir, "config.json"))
 
+        # Save initial best model (prevents deletion by rotation)
+        self._save_best_model("Initial best model saved")
+
     def _create_optimizer(self) -> optim.Optimizer:
         """Create optimizer"""
         if self.config.optimizer == "adam":
@@ -348,6 +390,34 @@ class RLTrainer:
         else:
             return None
 
+    def _save_best_model(self, message: str = ""):
+        """
+        Save best model to a separate file (won't be deleted by checkpoint rotation).
+
+        Args:
+            message: Optional message to print
+        """
+        best_path = os.path.join(self.config.checkpoint_dir, "best_model.pt")
+
+        checkpoint = {
+            "iteration": self.current_iteration,
+            "model_state_dict": self.best_model.state_dict(),
+            "win_rate": self.best_win_rate,
+            "config": self.config.to_dict(),
+            "model_config": {
+                "cnn_residual_blocks": self.config.cnn_blocks,
+                "use_rnn": self.config.use_rnn,
+            },
+        }
+
+        torch.save(checkpoint, best_path)
+
+        if message:
+            print(f"\n💾 {message}")
+        print(f"   Saved to: {best_path}")
+        print(f"   Iteration: {self.current_iteration}")
+        print(f"   Win rate: {self.best_win_rate:.1%}")
+
     def train(self):
         """
         Main training loop.
@@ -375,12 +445,15 @@ class RLTrainer:
         start_time = time.time()
 
         try:
-            for iteration in range(self.current_iteration, self.config.num_iterations):
+            start_iteration = (
+                self.current_iteration + 1 if self.current_iteration > 0 else 0
+            )
+            for iteration in range(start_iteration, self.config.num_iterations):
                 self.current_iteration = iteration
                 iteration_start = time.time()
 
                 print(f"\n{'='*80}")
-                print(f"ITERATION {iteration + 1}/{self.config.num_iterations}")
+                print(f"ITERATION {iteration}/{self.config.num_iterations}")
                 print(f"{'='*80}")
 
                 # Step 1: Self-play
@@ -431,6 +504,11 @@ class RLTrainer:
             self._save_checkpoint(name="error")
             raise
 
+        else:
+            # Save final checkpoint after successful training
+            print("\n💾 Saving final checkpoint...")
+            self._save_checkpoint()
+
         finally:
             total_time = time.time() - start_time
             self._print_final_summary(total_time)
@@ -450,6 +528,8 @@ class RLTrainer:
             temperature_threshold=self.config.temperature_threshold,
             max_moves=self.config.max_moves_per_game,
             use_rnn=self.config.use_rnn,
+            dirichlet_alpha=self.config.dirichlet_alpha,
+            resign_threshold=self.config.resign_threshold,
         )
 
         # Generate games
@@ -550,25 +630,64 @@ class RLTrainer:
                 policies = policies.to(self.device)
                 values = values.to(self.device)
 
-                # Forward pass
-                policy_logits, value_pred, _ = self.model(boards)
-
-                # Compute loss
-                policy_loss = self.policy_criterion(policy_logits, policies)
-                value_loss = self.value_criterion(value_pred, values)
-                loss = (
-                    self.config.policy_loss_weight * policy_loss
-                    + self.config.value_loss_weight * value_loss
-                )
-
-                # Backward pass
+                # Zero gradients
                 self.optimizer.zero_grad()
-                loss.backward()
 
-                # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                # Forward pass with optional mixed precision
+                if self.use_amp:
+                    # MIXED PRECISION PATH
+                    assert (
+                        self.scaler is not None
+                    ), "Scaler should be initialized when use_amp is True"
 
-                self.optimizer.step()
+                    autocast_context = autocast(device_type=AMP_DEVICE)
+
+                    with autocast_context:
+                        # Forward pass in fp16
+                        policy_logits, value_pred, _ = self.model(boards)
+
+                        # Compute loss in fp16
+                        policy_loss = self.policy_criterion(policy_logits, policies)
+                        value_loss = self.value_criterion(value_pred, values)
+                        loss = (
+                            self.config.policy_loss_weight * policy_loss
+                            + self.config.value_loss_weight * value_loss
+                        )
+
+                    # Backward pass with scaled gradients
+                    self.scaler.scale(loss).backward()
+
+                    # Unscale before gradient clipping
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), max_norm=1.0
+                    )
+
+                    # Optimizer step with scaler
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+
+                else:
+                    # STANDARD FP32 PATH (fallback for CPU or when AMP disabled)
+                    policy_logits, value_pred, _ = self.model(boards)
+
+                    policy_loss = self.policy_criterion(policy_logits, policies)
+                    value_loss = self.value_criterion(value_pred, values)
+                    loss = (
+                        self.config.policy_loss_weight * policy_loss
+                        + self.config.value_loss_weight * value_loss
+                    )
+
+                    # Backward pass
+                    loss.backward()
+
+                    # Gradient clipping
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), max_norm=1.0
+                    )
+
+                    # Optimizer step
+                    self.optimizer.step()
 
                 # Track metrics
                 total_loss += loss.item()
@@ -650,6 +769,8 @@ class RLTrainer:
             temperature_threshold=0,  # Deterministic play
             max_moves=self.config.max_moves_per_game,
             use_rnn=self.config.use_rnn,
+            dirichlet_alpha=0.0,  # No exploration during evaluation
+            resign_threshold=self.config.resign_threshold,
         )
 
         for game_num in tqdm(range(self.config.eval_games), desc="Evaluation games"):
@@ -691,21 +812,23 @@ class RLTrainer:
             self.best_iteration = self.current_iteration
             self.best_win_rate = win_rate
 
-            # Save best model
-            best_path = os.path.join(self.config.checkpoint_dir, "best_model.pt")
-            torch.save(
-                {
-                    "iteration": self.current_iteration,
-                    "model_state_dict": self.best_model.state_dict(),
-                    "win_rate": win_rate,
-                    "config": self.config.to_dict(),
-                },
-                best_path,
+            # Save best model using helper
+            self._save_best_model(
+                f"New best model! (win rate: {win_rate:.1%} >= {self.config.win_threshold:.1%})"
             )
         else:
             print(
                 f"\n   Current model not better than best (need {self.config.win_threshold:.1%})"
             )
+
+            if win_rate > self.best_win_rate:
+                print(
+                    f"   However, this is better than previous best ({self.best_win_rate:.1%})"
+                )
+                self.best_model.load_state_dict(self.model.state_dict())
+                self.best_iteration = self.current_iteration
+                self.best_win_rate = win_rate
+                self._save_best_model("Saving improved model (below threshold)")
 
         # Log to tensorboard
         self.writer.add_scalar("eval/win_rate", win_rate, self.current_iteration)
@@ -820,7 +943,7 @@ class RLTrainer:
     def _save_checkpoint(self, name: Optional[str] = None):
         """Save training checkpoint"""
         if name is None:
-            name = f"iteration_{self.current_iteration + 1}"
+            name = f"iteration_{self.current_iteration}"
 
         checkpoint = {
             "iteration": self.current_iteration,
@@ -837,6 +960,10 @@ class RLTrainer:
 
         if self.scheduler:
             checkpoint["scheduler_state_dict"] = self.scheduler.state_dict()
+
+        # Save GradScaler state if using AMP
+        if self.scaler:
+            checkpoint["scaler_state_dict"] = self.scaler.state_dict()
 
         # Save checkpoint
         checkpoint_path = os.path.join(
@@ -891,8 +1018,18 @@ class RLTrainer:
         if "scheduler_state_dict" in checkpoint and self.scheduler:
             self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
 
+        # Restore GradScaler state if using AMP
+        if "scaler_state_dict" in checkpoint and self.scaler:
+            self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
+            print(f"   Loaded GradScaler state")
+
         # Restore training state
         self.current_iteration = checkpoint["iteration"]
+
+        # Log resume information
+        next_iteration = self.current_iteration + 1
+        print(f"   Resuming from iteration {self.current_iteration}")
+        print(f"   Next iteration will be: {next_iteration}")
         self.total_games_played = checkpoint.get("total_games_played", 0)
         self.total_training_steps = checkpoint.get("total_training_steps", 0)
         self.best_iteration = checkpoint.get("best_iteration", 0)
@@ -985,6 +1122,12 @@ def main():
     # Self-play parameters
     parser.add_argument("--simulations", type=int, default=200, help="MCTS simulations")
     parser.add_argument(
+        "--c-puct",
+        type=float,
+        default=2.0,
+        help="MCTS exploration constant (default: 2.0)",
+    )
+    parser.add_argument(
         "--parallel", action="store_true", help="Use parallel self-play"
     )
     parser.add_argument(
@@ -1006,6 +1149,27 @@ def main():
     parser.add_argument("--eval-freq", type=int, default=5, help="Evaluation frequency")
     parser.add_argument("--eval-games", type=int, default=20, help="Evaluation games")
 
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.5,
+        help="Temperature for move selection (default: 1.5)",
+    )
+
+    parser.add_argument(
+        "--dirichlet-alpha",
+        type=float,
+        default=0.3,
+        help="Dirichlet noise alpha for root exploration (default: 0.3)",
+    )
+
+    parser.add_argument(
+        "--resign-threshold",
+        type=float,
+        default=-0.9,
+        help="Resign if position value drops below this (default: -0.9)",
+    )
+
     # Checkpointing
     parser.add_argument(
         "--checkpoint-dir",
@@ -1017,8 +1181,18 @@ def main():
         "--resume", type=str, default=None, help="Resume from checkpoint"
     )
 
+    parser.add_argument(
+        "--pretrained-model",
+        type=str,
+        default=None,
+        help="Initialize from supervised model weights",
+    )
+
     # Device
     parser.add_argument("--cpu", action="store_true", help="Force CPU")
+    parser.add_argument(
+        "--no-amp", action="store_true", help="Disable mixed precision training (AMP)"
+    )
 
     args = parser.parse_args()
 
@@ -1028,6 +1202,10 @@ def main():
         games_per_iteration=args.games_per_iter,
         training_steps_per_iteration=args.training_steps,
         num_simulations=args.simulations,
+        c_puct=getattr(args, "c_puct", 2.0),
+        temperature=args.temperature,
+        dirichlet_alpha=args.dirichlet_alpha,
+        resign_threshold=args.resign_threshold,
         use_parallel_selfplay=args.parallel,
         num_workers=args.workers,
         cnn_blocks=args.cnn_blocks,
@@ -1039,10 +1217,13 @@ def main():
         eval_games=args.eval_games,
         checkpoint_dir=args.checkpoint_dir,
         device="cpu" if args.cpu else "cuda",
+        use_amp=not args.no_amp,
     )
 
     # Create trainer
-    trainer = RLTrainer(config=config, resume_from=args.resume)
+    trainer = RLTrainer(
+        config=config, resume_from=args.resume, pretrained_path=args.pretrained_model
+    )
 
     # Start training
     trainer.train()

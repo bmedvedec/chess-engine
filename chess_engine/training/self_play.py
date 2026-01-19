@@ -36,11 +36,13 @@ from chess_engine.data.replay_buffer import ReplayBuffer, GameExample
 
 # Constants
 DEFAULT_MAX_MOVES = 200
-DEFAULT_TEMPERATURE = 1.0
+DEFAULT_TEMPERATURE = 1.5
 DEFAULT_TEMPERATURE_THRESHOLD = 15
 LATE_GAME_TEMPERATURE = 0.1
 DEFAULT_NUM_SIMULATIONS = 100
-DEFAULT_C_PUCT = 1.5
+DEFAULT_C_PUCT = 2.0
+DEFAULT_DIRICHLET_ALPHA = 0.3
+DEFAULT_RESIGN_THRESHOLD = -0.9
 
 
 @dataclass
@@ -54,6 +56,8 @@ class SelfPlayConfig:
     max_moves: int = DEFAULT_MAX_MOVES
     use_rnn: bool = False
     late_game_temperature: float = LATE_GAME_TEMPERATURE
+    dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
+    resign_threshold: float = DEFAULT_RESIGN_THRESHOLD
 
     @classmethod
     def from_args(cls, args) -> "SelfPlayConfig":
@@ -67,6 +71,10 @@ class SelfPlayConfig:
             ),
             max_moves=getattr(args, "max_moves", DEFAULT_MAX_MOVES),
             use_rnn=getattr(args, "use_rnn", False),
+            dirichlet_alpha=getattr(args, "dirichlet_alpha", DEFAULT_DIRICHLET_ALPHA),
+            resign_threshold=getattr(
+                args, "resign_threshold", DEFAULT_RESIGN_THRESHOLD
+            ),
         )
 
 
@@ -78,6 +86,7 @@ class SelfPlayStatistics:
     white_wins: int = 0
     black_wins: int = 0
     draws: int = 0
+    resignations: int = 0
     total_examples: int = 0
     total_moves: int = 0
     errors: int = 0
@@ -102,11 +111,23 @@ class SelfPlayStatistics:
         """Draw percentage"""
         return self.draws / self.total_games * 100 if self.total_games > 0 else 0.0
 
-    def update(self, result: str, num_examples: int, num_moves: int):
+    @property
+    def resignation_rate(self) -> float:
+        """Resignation percentage"""
+        return (
+            self.resignations / self.total_games * 100 if self.total_games > 0 else 0.0
+        )
+
+    def update(
+        self, result: str, num_examples: int, num_moves: int, resigned: bool = False
+    ):
         """Update statistics with game result"""
         self.total_games += 1
         self.total_examples += num_examples
         self.total_moves += num_moves
+
+        if resigned:
+            self.resignations += 1
 
         if result == "1-0":
             self.white_wins += 1
@@ -126,6 +147,10 @@ class SelfPlayStatistics:
         print(f"      White wins: {self.white_wins} ({self.white_win_rate:.1f}%)")
         print(f"      Black wins: {self.black_wins} ({self.black_win_rate:.1f}%)")
         print(f"      Draws: {self.draws} ({self.draw_rate:.1f}%)")
+        if self.resignations > 0:
+            print(
+                f"      Resignations: {self.resignations} ({self.resignation_rate:.1f}%)"
+            )
         if self.errors > 0:
             print(f"   Errors: {self.errors}")
 
@@ -161,7 +186,7 @@ class SelfPlayWorker:
         self.board_encoder = BoardEncoder()
         self.move_encoder = MoveEncoder()
 
-        # Create MCTS
+        # Create MCTS with exploration parameters
         self.mcts = MCTS(
             model=model,
             board_encoder=self.board_encoder,
@@ -171,6 +196,9 @@ class SelfPlayWorker:
             c_puct=self.config.c_puct,
             temperature=self.config.temperature,
             use_rnn=self.config.use_rnn,
+            # Enable Dirichlet noise for exploration
+            dirichlet_epsilon=0.25,  # 25% noise at root
+            dirichlet_alpha=self.config.dirichlet_alpha,
         )
 
     def _extract_policy(
@@ -229,9 +257,25 @@ class SelfPlayWorker:
 
         return policy
 
+    def _should_resign(self, stats: Optional[Dict]) -> bool:
+        """
+        Check if the position is hopeless and should resign.
+
+        Args:
+            stats: MCTS statistics including root value
+
+        Returns:
+            True if should resign
+        """
+        if stats is None or "root_value" not in stats:
+            return False
+
+        root_value = stats["root_value"]
+        return root_value < self.config.resign_threshold
+
     def play_game(
         self, max_moves: int = 200, verbose: bool = False
-    ) -> Tuple[List[GameExample], str]:
+    ) -> Tuple[List[GameExample], str, bool]:
         """
         Play one self-play game.
 
@@ -240,7 +284,7 @@ class SelfPlayWorker:
             verbose: Print game progress
 
         Returns:
-            Tuple of (examples, result)
+            Tuple of (examples, result, resigned)
         """
         if max_moves is None:
             max_moves = self.config.max_moves
@@ -248,6 +292,7 @@ class SelfPlayWorker:
         board = chess.Board()
         examples = []
         move_count = 0
+        resigned = False
 
         if verbose:
             print("\n🎮 Starting self-play game...")
@@ -270,6 +315,15 @@ class SelfPlayWorker:
 
                     if stats is None or move not in board.legal_moves:
                         raise ValueError(f"MCTS returned illegal move: {move}")
+
+                    # Check for resignation (only after move 10 to avoid early quits)
+                    if move_count > 10 and self._should_resign(stats):
+                        resigned = True
+                        # Determine result based on who is to move (losing side)
+                        result = "0-1" if board.turn == chess.WHITE else "1-0"
+                        if verbose:
+                            print(f"   🏳️  Resignation at move {move_count}")
+                        break
 
                     # Extract complete policy
                     policy = self._extract_policy(board, stats)
@@ -294,11 +348,12 @@ class SelfPlayWorker:
                     result = "1/2-1/2"
                     break
 
-            # Determine game result
-            if board.is_game_over():
-                result = board.result()
-            else:
-                result = "1/2-1/2"  # Max moves reached
+            # Determine game result (if not resigned)
+            if not resigned:
+                if board.is_game_over():
+                    result = board.result()
+                else:
+                    result = "1/2-1/2"  # Max moves reached
 
             # Fill in values based on game outcome
             outcome = self._parse_outcome(result)
@@ -306,9 +361,11 @@ class SelfPlayWorker:
 
             if verbose:
                 print(f"   Game over: {result}")
+                if resigned:
+                    print(f"   (Resigned)")
                 print(f"   Collected {len(examples)} training examples")
 
-            return examples, result
+            return examples, result, resigned
 
         except Exception as e:
             print(f"❌ Fatal error in play_game: {e}")
@@ -316,9 +373,9 @@ class SelfPlayWorker:
                 result = "1/2-1/2"
                 outcome = 0.0
                 self._assign_values(examples, outcome)
-                return examples, result
+                return examples, result, False
             else:
-                return [], "1/2-1/2"
+                return [], "1/2-1/2", False
 
     def _parse_outcome(self, result: str) -> float:
         """Parse game result to value"""
@@ -351,7 +408,7 @@ class SelfPlayWorker:
         Args:
             num_games: Number of games to play
             buffer: Optional ReplayBuffer to add examples to
-            save_path: Optional path to save examples (if no buffer provided)
+            save_path: Optional path to save examples (if no buffer)
 
         Returns:
             List of all training examples
@@ -359,31 +416,16 @@ class SelfPlayWorker:
         all_examples = []
         stats = SelfPlayStatistics()
 
-        print(f"\n🎮 Playing {num_games} self-play games (sequential)...")
-        print(f"   MCTS simulations: {self.config.num_simulations}")
-        print(f"   Temperature threshold: {self.config.temperature_threshold}")
+        print(f"\n🎮 Playing {num_games} self-play games...")
 
-        start_time = time.time()
+        for i in tqdm(range(num_games), desc="Self-play"):
+            examples, result, resigned = self.play_game()
+            all_examples.extend(examples)
+            stats.update(result, len(examples), len(examples), resigned)
 
-        for game_num in tqdm(range(num_games), desc="Self-play"):
-            try:
-                examples, result = self.play_game(verbose=False)
-                all_examples.extend(examples)
-                stats.update(result, len(examples), len(examples))
-
-                # Add to buffer if provided
-                if buffer is not None:
-                    buffer.add_game_examples(examples)
-
-            except Exception as e:
-                print(f"\n⚠️  Error in game {game_num + 1}: {e}")
-                stats.errors += 1
-
-        elapsed = time.time() - start_time
-
-        print(f"\n✅ Self-play complete!")
-        print(f"   Time: {elapsed/60:.1f} minutes")
-        print(f"   Avg time/game: {elapsed/num_games:.1f}s")
+            # Add to buffer if provided
+            if buffer is not None:
+                buffer.add_game_examples(examples)
 
         stats.print_summary()
 
@@ -394,9 +436,10 @@ class SelfPlayWorker:
         return all_examples
 
     def _save_examples(self, examples: List[GameExample], filepath: str):
-        """Save training examples to disk"""
-        # Convert to serializable format
-        serializable_examples = [
+        """Save examples to disk"""
+        import pickle
+
+        serializable = [
             {
                 "fen": example.fen,
                 "policy": example.policy,
@@ -411,60 +454,32 @@ class SelfPlayWorker:
             os.makedirs(directory, exist_ok=True)
 
         with open(filepath, "wb") as f:
-            pickle.dump(serializable_examples, f)
+            pickle.dump(serializable, f)
 
         print(f"\n💾 Saved {len(examples)} examples to {filepath}")
 
-    @staticmethod
-    def load_examples(filepath: str) -> List[Dict]:
-        """Load training examples from disk"""
-        with open(filepath, "rb") as f:
-            examples = pickle.load(f)
-        print(f"📂 Loaded {len(examples)} examples from {filepath}")
-        return examples
-
 
 # ============================================================================
-# PARALLEL SELF-PLAY IMPLEMENTATION
+# PARALLEL EXECUTION
 # ============================================================================
 
 
 def _play_single_game_worker(
-    model_path: str, config_dict: Dict, game_seed: int
-) -> Tuple[List[Dict], str]:
-    """
-    Worker function for parallel game execution.
+    model_path: str, config_dict: dict, game_num: int
+) -> Tuple[List[Dict], str, bool]:
+    """Worker function for parallel game execution"""
+    # IMPORTANT: Ignore keyboard interrupts in worker processes
+    import signal
 
-    Args:
-        model_path: Path to saved model checkpoint
-        config_dict: Configuration dictionary
-        game_seed: Random seed for this game
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-    Returns:
-        Tuple of (serialized_examples, result)
-    """
-    # Set random seed
-    np.random.seed(game_seed)
-    torch.manual_seed(game_seed)
+    # Re-initialize model in worker process
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load checkpoint first to get model config
-    device = torch.device("cpu")
+    # Load model
+    model = HybridChessNet(use_rnn=config_dict.get("use_rnn", False))
     checkpoint = torch.load(model_path, map_location=device)
 
-    # Get model architecture from checkpoint or config
-    if "model_config" in checkpoint:
-        model_config = checkpoint["model_config"]
-        cnn_blocks = model_config.get("cnn_residual_blocks", 10)
-        use_rnn = model_config.get("use_rnn", False)
-    else:
-        # Fallback to config dict
-        cnn_blocks = config_dict.get("cnn_blocks", 10)
-        use_rnn = config_dict.get("use_rnn", False)
-
-    # Create model with correct architecture
-    model = HybridChessNet(cnn_residual_blocks=cnn_blocks, use_rnn=use_rnn)
-
-    # Load state dict
     if "model_state_dict" in checkpoint:
         model.load_state_dict(checkpoint["model_state_dict"])
     else:
@@ -473,12 +488,22 @@ def _play_single_game_worker(
     model.to(device)
     model.eval()
 
-    # Create config and worker
-    config = SelfPlayConfig(**config_dict)
-    worker = SelfPlayWorker(model=model, device=device, config=config)
+    # Create config
+    config = SelfPlayConfig(
+        num_simulations=config_dict["num_simulations"],
+        c_puct=config_dict["c_puct"],
+        temperature=config_dict["temperature"],
+        temperature_threshold=config_dict["temperature_threshold"],
+        max_moves=config_dict["max_moves"],
+        use_rnn=config_dict["use_rnn"],
+        late_game_temperature=config_dict["late_game_temperature"],
+        dirichlet_alpha=config_dict["dirichlet_alpha"],  # NEW
+        resign_threshold=config_dict["resign_threshold"],  # NEW
+    )
 
-    # Play game
-    examples, result = worker.play_game(verbose=False)
+    # Create worker and play game
+    worker = SelfPlayWorker(model=model, device=device, config=config)
+    examples, result, resigned = worker.play_game()
 
     # Serialize examples
     serialized = [
@@ -491,15 +516,11 @@ def _play_single_game_worker(
         for ex in examples
     ]
 
-    return serialized, result
+    return serialized, result, resigned
 
 
 class ParallelSelfPlayWorker:
-    """
-    Worker for generating self-play games in parallel.
-
-    Uses multiprocessing to play multiple games simultaneously.
-    """
+    """Worker for parallel self-play game generation"""
 
     def __init__(
         self,
@@ -508,20 +529,16 @@ class ParallelSelfPlayWorker:
         num_workers: Optional[int] = None,
     ):
         """
-        Initialize parallel self-play worker.
+        Initialize parallel worker.
 
         Args:
-            model_path: Path to saved model checkpoint
+            model_path: Path to model checkpoint
             config: Self-play configuration
-            num_workers: Number of parallel workers
+            num_workers: Number of parallel workers (default: CPU count - 1)
         """
         self.model_path = model_path
         self.config = config or SelfPlayConfig()
-
-        if num_workers is None:
-            self.num_workers = max(1, cpu_count() - 1)
-        else:
-            self.num_workers = num_workers
+        self.num_workers = num_workers or max(1, cpu_count() - 1)
 
         print(f"🔧 Initialized parallel worker with {self.num_workers} processes")
 
@@ -537,7 +554,7 @@ class ParallelSelfPlayWorker:
         Args:
             num_games: Number of games to play
             buffer: Optional ReplayBuffer to add examples to
-            save_path: Optional path to save examples (if no buffer provided)
+            save_path: Optional path to save examples (if no buffer)
 
         Returns:
             List of all training examples
@@ -560,6 +577,8 @@ class ParallelSelfPlayWorker:
             "max_moves": self.config.max_moves,
             "use_rnn": self.config.use_rnn,
             "late_game_temperature": self.config.late_game_temperature,
+            "dirichlet_alpha": self.config.dirichlet_alpha,
+            "resign_threshold": self.config.resign_threshold,
         }
 
         # Create arguments
@@ -569,16 +588,22 @@ class ParallelSelfPlayWorker:
 
         # Play games in parallel
         with Pool(processes=self.num_workers) as pool:
-            results = list(
-                tqdm(
-                    pool.starmap(_play_single_game_worker, game_args),
-                    total=num_games,
-                    desc="Self-play (parallel)",
+            try:
+                results = list(
+                    tqdm(
+                        pool.starmap(_play_single_game_worker, game_args),
+                        total=num_games,
+                        desc="Self-play (parallel)",
+                    )
                 )
-            )
+            except KeyboardInterrupt:
+                print("\n⚠️  Stopping workers...")
+                pool.terminate()  # Kill workers
+                pool.join()  # Wait for cleanup
+                raise  # Re-raise to trigger main handler
 
         # Process results
-        for serialized_examples, result in results:
+        for serialized_examples, result, resigned in results:
             examples = [
                 GameExample(
                     fen=example["fen"],
@@ -590,7 +615,7 @@ class ParallelSelfPlayWorker:
             ]
 
             all_examples.extend(examples)
-            stats.update(result, len(examples), len(examples))
+            stats.update(result, len(examples), len(examples), resigned)
 
             # Add to buffer if provided
             if buffer is not None:
@@ -636,62 +661,8 @@ class ParallelSelfPlayWorker:
 
 
 # ============================================================================
-# TEST AND MAIN
+# MAIN
 # ============================================================================
-
-
-def test_self_play():
-    """Test self-play with ReplayBuffer integration"""
-    print("=" * 80)
-    print("TESTING SELF-PLAY WITH REPLAY BUFFER INTEGRATION")
-    print("=" * 80)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"\nDevice: {device}")
-
-    # Create model
-    print("\nCreating model...")
-    model = HybridChessNet(cnn_residual_blocks=3, use_rnn=False)
-    model.to(device)
-    model.eval()
-
-    # Test Self-play with ReplayBuffer
-    print("\n1. Testing self-play with ReplayBuffer...")
-    config = SelfPlayConfig(num_simulations=50, max_moves=50)
-    worker = SelfPlayWorker(model=model, device=device, config=config)
-
-    # Create replay buffer
-    buffer = ReplayBuffer(max_size=1000, memory_efficient=True)
-
-    # Play games and add to buffer
-    examples = worker.play_games(num_games=3, buffer=buffer)
-
-    print(f"\n   Buffer size: {len(buffer)}")
-    print(f"   Total examples collected: {len(examples)}")
-
-    # Test sampling from buffer
-    print("\n2. Testing buffer sampling...")
-    batch = buffer.sample(batch_size=5)
-    print(f"   Sampled {len(batch['boards'])} examples")
-    print(f"   First board: {batch['boards'][0].fen()[:50]}...")
-
-    # Test buffer statistics
-    print("\n3. Testing buffer statistics...")
-    stats = buffer.get_statistics()
-    for key, value in stats.items():
-        print(f"   {key}: {value:.3f}")
-
-    # Test save/load
-    print("\n4. Testing buffer save/load...")
-    buffer.save("data/selfplay/test_buffer.pkl")
-
-    buffer2 = ReplayBuffer()
-    buffer2.load("data/selfplay/test_buffer.pkl")
-    print(f"   Loaded buffer size: {len(buffer2)}")
-
-    print("\n" + "=" * 80)
-    print("✅ SELF-PLAY + REPLAY BUFFER TESTS COMPLETE")
-    print("=" * 80)
 
 
 def main():
@@ -716,6 +687,18 @@ def main():
     )
     parser.add_argument("--max-moves", type=int, default=DEFAULT_MAX_MOVES)
     parser.add_argument("--use-buffer", action="store_true", help="Use ReplayBuffer")
+    parser.add_argument(
+        "--dirichlet-alpha",
+        type=float,
+        default=DEFAULT_DIRICHLET_ALPHA,
+        help="Dirichlet noise alpha",
+    )  # NEW
+    parser.add_argument(
+        "--resign-threshold",
+        type=float,
+        default=DEFAULT_RESIGN_THRESHOLD,
+        help="Resign threshold",
+    )  # NEW
 
     args = parser.parse_args()
 
@@ -770,7 +753,4 @@ def main():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 1:
-        test_self_play()
-    else:
-        main()
+    main()

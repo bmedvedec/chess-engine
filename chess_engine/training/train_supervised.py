@@ -43,6 +43,7 @@ from chess_engine.data.chess_dataset import (
     ChessDataset,
     load_dataset,
     create_dataloader,
+    split_examples,
 )
 from chess_engine.utils.board_encoder import BoardEncoder
 from chess_engine.utils.move_encoder import MoveEncoder
@@ -571,11 +572,59 @@ class ChessTrainer:
         self.writer.close()
 
 
+def load_chunked_data(chunk_dir: str) -> list:
+    """
+    Load all chunks from a directory and combine them.
+
+    Args:
+        chunk_dir: Directory containing chunk_XXXX.pkl files
+
+    Returns:
+        Combined list of all examples from all chunks
+    """
+    import glob
+
+    print(f"\n📦 Loading chunked data from: {chunk_dir}")
+
+    # Find all chunk files
+    chunk_pattern = os.path.join(chunk_dir, "chunk_*.pkl")
+    chunk_files = sorted(glob.glob(chunk_pattern))
+
+    if not chunk_files:
+        raise FileNotFoundError(f"No chunk files found in {chunk_dir}")
+
+    print(f"   Found {len(chunk_files)} chunk files")
+
+    # Load all chunks
+    all_examples = []
+
+    with tqdm(total=len(chunk_files), desc="Loading chunks", unit="chunk") as pbar:
+        for chunk_file in chunk_files:
+            try:
+                chunk_examples = load_dataset(chunk_file)
+                all_examples.extend(chunk_examples)
+                pbar.update(1)
+                pbar.set_postfix({"total_positions": len(all_examples)})
+            except Exception as e:
+                print(f"⚠️  Warning: Failed to load {chunk_file}: {e}")
+                continue
+
+    print(
+        f"✅ Loaded {len(all_examples):,} total examples from {len(chunk_files)} chunks"
+    )
+
+    return all_examples
+
+
 def main():
     """Main training script"""
     parser = argparse.ArgumentParser(description="Train chess engine")
+    # Required arguments
     parser.add_argument(
-        "--data", type=str, required=True, help="Path to training data (.pkl)"
+        "--data",
+        type=str,
+        required=True,
+        help="Path to training data (.pkl file or directory with chunks)",
     )
     parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
     parser.add_argument("--batch-size", type=int, default=256, help="Batch size")
@@ -652,30 +701,55 @@ def main():
 
     # Load data
     print(f"\nLoading data from: {args.data}")
-    examples = load_dataset(args.data)
 
-    # Split train/val
-    val_size = int(len(examples) * args.val_split)
-    train_size = len(examples) - val_size
-    train_examples = examples[:train_size]
-    val_examples = examples[train_size:]
+    # Check if input is a directory (chunked) or file (single dataset)
+    if os.path.isdir(args.data):
+        # Chunked data - load all chunks
+        examples = load_chunked_data(args.data)
+    else:
+        # Single file
+        examples = load_dataset(args.data)
 
-    print(f"Training examples: {len(train_examples)}")
-    print(f"Validation examples: {len(val_examples)}")
+    # Split train/val using split_examples for proper shuffling and reproducibility
+    train_examples, val_examples = split_examples(
+        examples,
+        train_ratio=1.0 - args.val_split,
+        shuffle=True,
+        seed=42,  # Reproducibility
+    )
+
+    print(f"Training examples: {len(train_examples):,}")
+    print(f"Validation examples: {len(val_examples):,}")
 
     # Create datasets
     board_encoder = BoardEncoder()
     move_encoder = MoveEncoder()
 
-    train_dataset = ChessDataset(train_examples, board_encoder, move_encoder)
-    val_dataset = ChessDataset(val_examples, board_encoder, move_encoder)
+    # Training dataset: Enable caching and augmentation
+    train_dataset = ChessDataset(
+        train_examples,
+        board_encoder,
+        move_encoder,
+        cache_tensors=True,
+        augment=True,
+    )
+
+    # Validation dataset: Enable caching, disable augmentation
+    val_dataset = ChessDataset(
+        val_examples,
+        board_encoder,
+        move_encoder,
+        cache_tensors=True,
+        augment=False,
+    )
 
     # Create dataloaders
+    # Note: num_workers=0 on Windows to avoid multiprocessing issues with cached tensors
     train_loader = create_dataloader(
-        train_dataset, batch_size=args.batch_size, shuffle=True
+        train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0
     )
     val_loader = create_dataloader(
-        val_dataset, batch_size=args.batch_size, shuffle=False
+        val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0
     )
 
     # Create model

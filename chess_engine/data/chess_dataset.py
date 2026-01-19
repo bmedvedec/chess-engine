@@ -24,6 +24,7 @@ from chess_engine.utils.board_encoder import DataAugmentation
 # Constants
 SKIP_OPENING_MOVES = 5  # Skip first N moves (usually book moves)
 DEFAULT_MIN_ELO = 1500
+DEFAULT_MAX_ELO = 3000
 DEFAULT_MAX_POSITIONS_PER_GAME = 40
 DEFAULT_BATCH_SIZE = 256
 DEFAULT_TRAIN_RATIO = 0.9
@@ -51,6 +52,8 @@ class ChessGameParser:
     def __init__(
         self,
         min_elo: int = DEFAULT_MIN_ELO,
+        max_elo: int = DEFAULT_MAX_ELO,
+        time_controls: Optional[set] = None,
         max_positions_per_game: int = DEFAULT_MAX_POSITIONS_PER_GAME,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ):
@@ -64,6 +67,8 @@ class ChessGameParser:
                             Called after each game is processed
         """
         self.min_elo = min_elo
+        self.max_elo = max_elo
+        self.time_controls = time_controls
         self.max_positions_per_game = max_positions_per_game
         self.progress_callback = progress_callback
 
@@ -223,11 +228,20 @@ class ChessGameParser:
             white_elo = int(headers.get("WhiteElo", 0))
             black_elo = int(headers.get("BlackElo", 0))
 
-            if white_elo < self.min_elo or black_elo < self.min_elo:
+            # ELO filter
+            if not (
+                self.min_elo <= white_elo <= self.max_elo
+                and self.min_elo <= black_elo <= self.max_elo
+            ):
                 return False
         except (ValueError, TypeError):
-            # No valid ELO, skip
             return False
+
+        # --- Time control filter (Lichess-specific) ---
+        if self.time_controls is not None:
+            event = headers.get("Event", "").lower()
+            if not any(tc in event for tc in self.time_controls):
+                return False
 
         # Must have a result
         result = headers.get("Result", "*")
