@@ -90,6 +90,24 @@ class RLTrainingConfig:
     dirichlet_alpha: float = 0.3
     resign_threshold: float = -0.9
 
+    # ASYMMETRIC SELF-PLAY (to break self-play symmetry)
+    asymmetric_play: bool = True  # Enable asymmetric self-play
+    temperature_variation: float = 0.3  # Random variation range (±N)
+    white_temperature: Optional[float] = None  # Override temp for white
+    black_temperature: Optional[float] = None  # Override temp for black
+
+    # MIXED TRAINING OPPONENTS (to break self-play symmetry)
+    use_mixed_opponents: bool = False  # Enable mixed opponent training
+    self_play_ratio: float = 0.70  # 70% pure self-play
+    old_opponent_ratio: float = 0.20  # 20% vs older checkpoint
+    random_opponent_ratio: float = 0.10  # 10% vs random player
+    old_opponent_iterations_back: int = 2  # Use checkpoint N iterations ago
+
+    # VALUE TARGET SHARPENING (to amplify win/loss signals)
+    use_value_sharpening: bool = True  # Enable value target sharpening
+    value_sharpening_factor: float = 1.5  # Amplification factor for wins/losses
+    draw_value_penalty: float = 0.0  # Optional penalty for draws (0.0 = no penalty)
+
     # Parallel self-play
     use_parallel_selfplay: bool = True
     num_workers: Optional[int] = None  # None = use all cores
@@ -418,6 +436,58 @@ class RLTrainer:
         print(f"   Iteration: {self.current_iteration}")
         print(f"   Win rate: {self.best_win_rate:.1%}")
 
+    def _sharpen_value_target(self, value: float) -> float:
+        """
+        Apply value target sharpening to amplify win/loss signals.
+
+        This helps the model learn more decisive play by:
+        1. Amplifying wins and losses (making signals stronger)
+        2. Optionally penalizing draws (making them less attractive)
+
+        Args:
+            value: Raw game outcome value (-1.0, 0.0, or 1.0)
+
+        Returns:
+            Sharpened value target for training
+
+        Example:
+            Raw values:      -1.0,  0.0,  1.0
+            Sharpened (1.5): -1.0,  0.0,  1.0  (clamped at ±1.0)
+            With penalty:    -1.0, -0.2,  1.0  (draws penalized)
+        """
+        if not self.config.use_value_sharpening:
+            return value
+
+        # Special handling for draws
+        if abs(value) < 0.01:  # Draw (value ≈ 0)
+            return -self.config.draw_value_penalty
+
+        # Amplify win/loss signals
+        # sign(value) preserves direction, amplification increases magnitude
+        sharpened = np.sign(value) * min(
+            1.0, abs(value) * self.config.value_sharpening_factor
+        )
+
+        return float(sharpened)
+
+    def _sharpen_game_values(self, examples: List[GameExample]) -> List[GameExample]:
+        """
+        Apply value sharpening to all examples from a game.
+
+        Args:
+            examples: List of game examples with raw values
+
+        Returns:
+            Same examples with sharpened values
+        """
+        if not self.config.use_value_sharpening:
+            return examples
+
+        for example in examples:
+            example.value = self._sharpen_value_target(example.value)
+
+        return examples
+
     def train(self):
         """
         Main training loop.
@@ -515,10 +585,49 @@ class RLTrainer:
             self.writer.close()
 
     def _self_play_step(self):
-        """Execute self-play game generation"""
+        """Execute self-play game generation with mixed opponents"""
         print(f"\n🎮 Self-Play: Generating {self.config.games_per_iteration} games...")
 
         self.model.eval()
+
+        # Calculate game distribution based on mixed opponent ratios
+        if self.config.use_mixed_opponents:
+            total_ratio = (
+                self.config.self_play_ratio
+                + self.config.old_opponent_ratio
+                + self.config.random_opponent_ratio
+            )
+
+            # Normalize ratios
+            self_play_games = int(
+                self.config.games_per_iteration
+                * self.config.self_play_ratio
+                / total_ratio
+            )
+            old_opponent_games = int(
+                self.config.games_per_iteration
+                * self.config.old_opponent_ratio
+                / total_ratio
+            )
+            random_opponent_games = (
+                self.config.games_per_iteration - self_play_games - old_opponent_games
+            )
+
+            print(f"   📊 Game distribution:")
+            print(
+                f"      Pure self-play: {self_play_games} games ({self_play_games/self.config.games_per_iteration*100:.0f}%)"
+            )
+            print(
+                f"      VS old checkpoint: {old_opponent_games} games ({old_opponent_games/self.config.games_per_iteration*100:.0f}%)"
+            )
+            print(
+                f"      VS random player: {random_opponent_games} games ({random_opponent_games/self.config.games_per_iteration*100:.0f}%)"
+            )
+        else:
+            # Pure self-play (original behavior)
+            self_play_games = self.config.games_per_iteration
+            old_opponent_games = 0
+            random_opponent_games = 0
 
         # Create self-play configuration
         selfplay_config = SelfPlayConfig(
@@ -530,11 +639,82 @@ class RLTrainer:
             use_rnn=self.config.use_rnn,
             dirichlet_alpha=self.config.dirichlet_alpha,
             resign_threshold=self.config.resign_threshold,
+            # Asymmetric play parameters
+            asymmetric_play=self.config.asymmetric_play,
+            white_temperature=self.config.white_temperature,
+            black_temperature=self.config.black_temperature,
+            temperature_variation=self.config.temperature_variation,
         )
 
-        # Generate games
+        all_examples = []
         start_time = time.time()
 
+        # PART 1: Pure self-play games (current vs current)
+        if self_play_games > 0:
+            print(f"\n   🔄 Generating {self_play_games} pure self-play games...")
+            examples = self._generate_selfplay_games(
+                num_games=self_play_games, config=selfplay_config, opponent_type="self"
+            )
+            all_examples.extend(examples)
+            print(f"      ✓ {len(examples)} examples")
+
+        # PART 2: Games vs old checkpoint
+        if (
+            old_opponent_games > 0
+            and self.current_iteration >= self.config.old_opponent_iterations_back
+        ):
+            old_iteration = (
+                self.current_iteration - self.config.old_opponent_iterations_back
+            )
+            old_checkpoint_path = os.path.join(
+                self.config.checkpoint_dir,
+                f"checkpoint_iteration_{old_iteration}.pt",
+            )
+
+            if os.path.exists(old_checkpoint_path):
+                print(
+                    f"\n   🔀 Generating {old_opponent_games} games vs old checkpoint (iteration {old_iteration})..."
+                )
+                examples = self._generate_vs_old_model_games(
+                    num_games=old_opponent_games,
+                    config=selfplay_config,
+                    old_checkpoint_path=old_checkpoint_path,
+                )
+                all_examples.extend(examples)
+                print(f"      ✓ {len(examples)} examples")
+            else:
+                print(f"\n   ⚠️  Old checkpoint not found: {old_checkpoint_path}")
+                print(f"      Skipping old opponent games")
+
+        # PART 3: Games vs random player
+        if random_opponent_games > 0:
+            print(
+                f"\n   🎲 Generating {random_opponent_games} games vs random player..."
+            )
+            examples = self._generate_vs_random_games(
+                num_games=random_opponent_games, config=selfplay_config
+            )
+            all_examples.extend(examples)
+            print(f"      ✓ {len(examples)} examples")
+
+        # Add all examples to replay buffer
+        self.replay_buffer.add_game_examples(all_examples)
+
+        elapsed = time.time() - start_time
+        self.total_games_played += self.config.games_per_iteration
+
+        print(f"\n✅ Generated {len(all_examples)} total training examples")
+        print(
+            f"   Time: {elapsed:.1f}s ({elapsed/self.config.games_per_iteration:.1f}s per game)"
+        )
+        print(f"   Buffer size: {len(self.replay_buffer)}")
+
+        return all_examples
+
+    def _generate_selfplay_games(
+        self, num_games: int, config: SelfPlayConfig, opponent_type: str
+    ) -> List[GameExample]:
+        """Generate pure self-play games (current model vs itself)"""
         if self.config.use_parallel_selfplay:
             # Save current model for parallel workers
             temp_model_path = os.path.join(self.config.checkpoint_dir, "temp_model.pt")
@@ -553,34 +733,277 @@ class RLTrainer:
             # Parallel self-play
             worker = ParallelSelfPlayWorker(
                 model_path=temp_model_path,
-                config=selfplay_config,
+                config=config,
                 num_workers=self.config.num_workers,
             )
-            examples = worker.play_games_parallel(
-                num_games=self.config.games_per_iteration,
-                buffer=self.replay_buffer,
-            )
+            examples = worker.play_games_parallel(num_games=num_games, buffer=None)
         else:
             # Sequential self-play
             worker = SelfPlayWorker(
                 model=self.model,
                 device=self.device,
-                config=selfplay_config,
+                config=config,
             )
-            examples = worker.play_games(
-                num_games=self.config.games_per_iteration,
-                buffer=self.replay_buffer,
+            examples = worker.play_games(num_games=num_games, buffer=None)
+
+        # Apply value sharpening to all self-play examples
+        if self.config.use_value_sharpening:
+            for example in examples:
+                example.value = self._sharpen_value_target(example.value)
+
+        return examples
+
+    def _generate_vs_old_model_games(
+        self, num_games: int, config: SelfPlayConfig, old_checkpoint_path: str
+    ) -> List[GameExample]:
+        """Generate games where current model plays vs older checkpoint"""
+        # Load old model
+        old_model = HybridChessNet(
+            cnn_residual_blocks=self.config.cnn_blocks, use_rnn=self.config.use_rnn
+        ).to(self.device)
+
+        checkpoint = torch.load(old_checkpoint_path, map_location=self.device)
+        if "model_state_dict" in checkpoint:
+            old_model.load_state_dict(checkpoint["model_state_dict"])
+        else:
+            old_model.load_state_dict(checkpoint)
+
+        old_model.eval()
+
+        # Play games with current model as white, old model as black
+        examples = []
+        for game_idx in range(num_games):
+            game_examples = self._play_vs_opponent_game(
+                player_model=self.model,
+                opponent_model=old_model,
+                config=config,
+                player_is_white=(game_idx % 2 == 0),  # Alternate colors
             )
+            examples.extend(game_examples)
 
-        elapsed = time.time() - start_time
-        self.total_games_played += self.config.games_per_iteration
+        return examples
 
-        print(f"\n✅ Generated {len(examples)} training examples")
-        print(
-            f"   Time: {elapsed:.1f}s ({elapsed/self.config.games_per_iteration:.1f}s per game)"
+    def _generate_vs_random_games(
+        self, num_games: int, config: SelfPlayConfig
+    ) -> List[GameExample]:
+        """Generate games where current model plays vs random player"""
+        examples = []
+        for game_idx in range(num_games):
+            game_examples = self._play_vs_random_game(
+                model=self.model,
+                config=config,
+                model_is_white=(game_idx % 2 == 0),  # Alternate colors
+            )
+            examples.extend(game_examples)
+
+        return examples
+
+    def _play_vs_opponent_game(
+        self,
+        player_model: nn.Module,
+        opponent_model: nn.Module,
+        config: SelfPlayConfig,
+        player_is_white: bool,
+    ) -> List[GameExample]:
+        """Play a single game with player vs opponent"""
+        import random as rand_module
+
+        board = chess.Board()
+        examples = []
+        move_count = 0
+
+        # Create MCTS for both players
+        player_mcts = MCTS(
+            model=player_model,
+            board_encoder=self.board_encoder,
+            move_encoder=self.move_encoder,
+            device=self.device,
+            num_simulations=config.num_simulations,
+            c_puct=config.c_puct,
+            temperature=config.temperature,
+            use_rnn=config.use_rnn,
+            dirichlet_epsilon=0.25,
+            dirichlet_alpha=config.dirichlet_alpha,
         )
-        print(f"   Buffer size: {len(self.replay_buffer)}/{self.config.buffer_size}")
-        print(f"   Total games played: {self.total_games_played}")
+
+        opponent_mcts = MCTS(
+            model=opponent_model,
+            board_encoder=self.board_encoder,
+            move_encoder=self.move_encoder,
+            device=self.device,
+            num_simulations=config.num_simulations,
+            c_puct=config.c_puct,
+            temperature=config.temperature,
+            use_rnn=config.use_rnn,
+            dirichlet_epsilon=0.25,
+            dirichlet_alpha=config.dirichlet_alpha,
+        )
+
+        try:
+            while not board.is_game_over() and move_count < config.max_moves:
+                move_count += 1
+
+                # Select MCTS based on whose turn it is
+                is_player_turn = (board.turn == chess.WHITE) == player_is_white
+                current_mcts = player_mcts if is_player_turn else opponent_mcts
+
+                # Adjust temperature
+                if move_count < config.temperature_threshold:
+                    current_mcts.temperature = config.temperature
+                else:
+                    current_mcts.temperature = 0.1  # Greedy in endgame
+
+                # Get move and stats
+                move, stats = current_mcts.search(board, return_stats=True)
+
+                # Store training example (only for player's moves)
+                if is_player_turn and stats:
+                    policy = {}
+                    if "visit_counts" in stats:
+                        visit_counts = stats["visit_counts"]
+                        total_visits = sum(visit_counts.values())
+                        if total_visits > 0:
+                            for move_obj in board.legal_moves:
+                                move_uci = move_obj.uci()
+                                visits = visit_counts.get(move_uci, 0)
+                                policy[move_uci] = visits / total_visits
+
+                    example = GameExample(
+                        fen=board.fen(),
+                        policy=policy,
+                        value=0.0,  # Fill in later
+                        move_number=move_count,
+                    )
+                    examples.append(example)
+
+                # Make move
+                board.push(move)
+
+            # Determine result and assign values
+            if board.is_game_over():
+                result = board.result()
+            else:
+                result = "1/2-1/2"
+
+            # Parse outcome from player's perspective
+            if result == "1-0":
+                outcome = 1.0 if player_is_white else -1.0
+            elif result == "0-1":
+                outcome = -1.0 if player_is_white else 1.0
+            else:
+                outcome = 0.0
+
+            # Assign values to examples
+            for example in examples:
+                board_state = chess.Board(example.fen)
+                if board_state.turn == chess.WHITE:
+                    example.value = outcome if player_is_white else -outcome
+                else:
+                    example.value = -outcome if player_is_white else outcome
+
+            # Apply value sharpening to amplify win/loss signals
+            examples = self._sharpen_game_values(examples)
+
+        except Exception as e:
+            print(f"      ⚠️  Error in game: {e}")
+
+        return examples
+
+    def _play_vs_random_game(
+        self, model: nn.Module, config: SelfPlayConfig, model_is_white: bool
+    ) -> List[GameExample]:
+        """Play a single game vs random player"""
+        import random as rand_module
+
+        board = chess.Board()
+        examples = []
+        move_count = 0
+
+        # Create MCTS for model
+        mcts = MCTS(
+            model=model,
+            board_encoder=self.board_encoder,
+            move_encoder=self.move_encoder,
+            device=self.device,
+            num_simulations=config.num_simulations,
+            c_puct=config.c_puct,
+            temperature=config.temperature,
+            use_rnn=config.use_rnn,
+            dirichlet_epsilon=0.25,
+            dirichlet_alpha=config.dirichlet_alpha,
+        )
+
+        try:
+            while not board.is_game_over() and move_count < config.max_moves:
+                move_count += 1
+
+                is_model_turn = (board.turn == chess.WHITE) == model_is_white
+
+                if is_model_turn:
+                    # Model's turn
+                    if move_count < config.temperature_threshold:
+                        mcts.temperature = config.temperature
+                    else:
+                        mcts.temperature = 0.1
+
+                    move, stats = mcts.search(board, return_stats=True)
+
+                    # Store training example
+                    if stats:
+                        policy = {}
+                        if "visit_counts" in stats:
+                            visit_counts = stats["visit_counts"]
+                            total_visits = sum(visit_counts.values())
+                            if total_visits > 0:
+                                for move_obj in board.legal_moves:
+                                    move_uci = move_obj.uci()
+                                    visits = visit_counts.get(move_uci, 0)
+                                    policy[move_uci] = visits / total_visits
+
+                        example = GameExample(
+                            fen=board.fen(),
+                            policy=policy,
+                            value=0.0,  # Fill in later
+                            move_number=move_count,
+                        )
+                        examples.append(example)
+                else:
+                    # Random player's turn
+                    legal_moves = list(board.legal_moves)
+                    move = rand_module.choice(legal_moves)
+
+                # Make move
+                board.push(move)
+
+            # Determine result and assign values
+            if board.is_game_over():
+                result = board.result()
+            else:
+                result = "1/2-1/2"
+
+            # Parse outcome from model's perspective
+            if result == "1-0":
+                outcome = 1.0 if model_is_white else -1.0
+            elif result == "0-1":
+                outcome = -1.0 if model_is_white else 1.0
+            else:
+                outcome = 0.0
+
+            # Assign values to examples
+            for example in examples:
+                board_state = chess.Board(example.fen)
+                if board_state.turn == chess.WHITE:
+                    example.value = outcome if model_is_white else -outcome
+                else:
+                    example.value = -outcome if model_is_white else outcome
+
+            # Apply value sharpening to amplify win/loss signals
+            examples = self._sharpen_game_values(examples)
+
+        except Exception as e:
+            print(f"      ⚠️  Error in game: {e}")
+
+        return examples
 
     def _training_step(self) -> Dict[str, float]:
         """Execute network training on replay buffer"""
@@ -1055,7 +1478,7 @@ class RLTrainer:
     ):
         """Print summary of iteration"""
         print(f"\n{'='*80}")
-        print(f"ITERATION {iteration + 1} SUMMARY")
+        print(f"ITERATION {iteration} SUMMARY")
         print(f"{'='*80}")
         print(f"\n📊 Metrics:")
         print(f"   Total games: {self.total_games_played}")
@@ -1073,7 +1496,7 @@ class RLTrainer:
             )
 
         print(f"\n🏆 Best Model:")
-        print(f"   Iteration: {self.best_iteration + 1}")
+        print(f"   Iteration: {self.best_iteration}")
         print(f"   Win rate: {self.best_win_rate:.1%}")
 
         print(f"\n⏱️  Time: {iteration_time:.1f}s")
@@ -1089,7 +1512,7 @@ class RLTrainer:
         print(f"   Total training steps: {self.total_training_steps}")
         print(f"   Final buffer size: {len(self.replay_buffer)}")
         print(f"\n🏆 Best Model:")
-        print(f"   Iteration: {self.best_iteration + 1}")
+        print(f"   Iteration: {self.best_iteration}")
         print(f"   Win rate: {self.best_win_rate:.1%}")
         print(f"\n⏱️  Total Time: {total_time/3600:.1f} hours")
         print(
@@ -1170,6 +1593,90 @@ def main():
         help="Resign if position value drops below this (default: -0.9)",
     )
 
+    # ASYMMETRIC SELF-PLAY PARAMETERS
+    parser.add_argument(
+        "--asymmetric-play",
+        action="store_true",
+        default=True,
+        help="Enable asymmetric self-play (different temps for white/black) (default: True)",
+    )
+    parser.add_argument(
+        "--no-asymmetric-play",
+        dest="asymmetric_play",
+        action="store_false",
+        help="Disable asymmetric self-play",
+    )
+    parser.add_argument(
+        "--temperature-variation",
+        type=float,
+        default=0.3,
+        help="Random temperature variation range (e.g., 0.3 = ±0.3) (default: 0.3)",
+    )
+    parser.add_argument(
+        "--white-temperature",
+        type=float,
+        default=None,
+        help="Fixed temperature for white (overrides --temperature)",
+    )
+    parser.add_argument(
+        "--black-temperature",
+        type=float,
+        default=None,
+        help="Fixed temperature for black (overrides --temperature)",
+    )
+
+    # MIXED OPPONENT PARAMETERS
+    parser.add_argument(
+        "--use-mixed-opponents",
+        action="store_true",
+        default=False,
+        help="Enable mixed opponent training (default: False)",
+    )
+    parser.add_argument(
+        "--self-play-ratio",
+        type=float,
+        default=0.70,
+        help="Ratio of pure self-play games (default: 0.70)",
+    )
+    parser.add_argument(
+        "--old-opponent-ratio",
+        type=float,
+        default=0.20,
+        help="Ratio of games vs old checkpoint (default: 0.20)",
+    )
+    parser.add_argument(
+        "--random-opponent-ratio",
+        type=float,
+        default=0.10,
+        help="Ratio of games vs random player (default: 0.10)",
+    )
+    parser.add_argument(
+        "--old-opponent-iterations-back",
+        type=int,
+        default=2,
+        help="Use checkpoint N iterations ago as old opponent (default: 2)",
+    )
+
+    # VALUE TARGET SHARPENING PARAMETERS
+    parser.add_argument(
+        "--use-value-sharpening",
+        action="store_true",
+        default=True,
+        help="Enable value target sharpening to amplify win/loss signals (default: True)",
+    )
+    parser.add_argument(
+        "--value-sharpening-factor",
+        type=float,
+        default=1.5,
+        help="Amplification factor for win/loss values (default: 1.5)",
+    )
+    parser.add_argument(
+        "--draw-value-penalty",
+        type=float,
+        default=0.0,
+        help="Penalty for draws, negative value makes draws less attractive (default: 0.0)",
+    )
+
     # Checkpointing
     parser.add_argument(
         "--checkpoint-dir",
@@ -1206,6 +1713,22 @@ def main():
         temperature=args.temperature,
         dirichlet_alpha=args.dirichlet_alpha,
         resign_threshold=args.resign_threshold,
+        # Asymmetric play parameters
+        asymmetric_play=args.asymmetric_play,
+        temperature_variation=args.temperature_variation,
+        white_temperature=args.white_temperature,
+        black_temperature=args.black_temperature,
+        # Mixed opponent parameters
+        use_mixed_opponents=args.use_mixed_opponents,
+        self_play_ratio=args.self_play_ratio,
+        old_opponent_ratio=args.old_opponent_ratio,
+        random_opponent_ratio=args.random_opponent_ratio,
+        old_opponent_iterations_back=args.old_opponent_iterations_back,
+        # Value sharpening parameters
+        use_value_sharpening=args.use_value_sharpening,
+        value_sharpening_factor=args.value_sharpening_factor,
+        draw_value_penalty=args.draw_value_penalty,
+        # Rest of config
         use_parallel_selfplay=args.parallel,
         num_workers=args.workers,
         cnn_blocks=args.cnn_blocks,

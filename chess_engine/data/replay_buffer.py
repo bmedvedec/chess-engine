@@ -44,6 +44,7 @@ class ReplayBuffer:
     - Fixed maximum size (FIFO when full)
     - Random sampling for training
     - Move history tracking for RNN
+    - Weighted sampling for decisive games**
     """
 
     def __init__(self, max_size: int = 100000, memory_efficient: bool = True):
@@ -149,12 +150,23 @@ class ReplayBuffer:
         for example in examples:
             self.add_game_example(example)
 
-    def sample(self, batch_size: int) -> Dict[str, List]:
+    def sample(
+        self,
+        batch_size: int,
+        weighted: bool = False,
+        weights: Optional[List[float]] = None,
+    ) -> Dict[str, List]:
         """
-        Sample a random batch of examples.
+        Sample a random batch of examples with optional weighting.
+        Now supports weighted sampling to prioritize decisive games!
 
         Args:
             batch_size: Number of examples to sample
+            weighted: If True, use weighted sampling based on provided weights
+            weights: Optional sample weights (must match buffer size if provided)
+                    If None and weighted=True, uses outcome-based weights:
+                    - Decisive games (|value| > 0.1): weight = 2.0
+                    - Draws (|value| <= 0.1): weight = 1.0
 
         Returns:
             Dictionary with keys:
@@ -162,11 +174,56 @@ class ReplayBuffer:
             - 'policies': List of policy targets
             - 'values': List of value targets
             - 'move_histories': List of move history lists
+
+        Example usage:
+            # Prioritize decisive games 2x over draws
+            batch = replay_buffer.sample(batch_size=256, weighted=True)
+
+            # Custom weights
+            custom_weights = [3.0 if abs(ex["value"]) > 0.5 else 1.0 for ex in buffer.buffer]
+            batch = replay_buffer.sample(batch_size=256, weighted=True, weights=custom_weights)
         """
         if len(self.buffer) < batch_size:
             batch_size = len(self.buffer)
 
-        batch = random.sample(self.buffer, batch_size)
+        if weighted:
+            # Use outcome-based weights if none provided
+            if weights is None:
+                weights = [
+                    2.0 if abs(example["value"]) > 0.1 else 1.0
+                    for example in self.buffer
+                ]
+
+            # Validate weights length
+            if len(weights) != len(self.buffer):
+                raise ValueError(
+                    f"Weights length ({len(weights)}) must match buffer size ({len(self.buffer)})"
+                )
+
+            # Normalize weights to probabilities
+            weights_array = np.array(weights, dtype=np.float64)
+
+            # Handle edge case of all-zero weights
+            if weights_array.sum() == 0:
+                weights_array = np.ones_like(weights_array)
+
+            probabilities = weights_array / weights_array.sum()
+
+            # Sample without replacement using weighted probabilities
+            try:
+                indices = np.random.choice(
+                    len(self.buffer), size=batch_size, replace=False, p=probabilities
+                )
+                batch = [self.buffer[i] for i in indices]
+            except ValueError as e:
+                # Fallback to uniform sampling if weighted sampling fails
+                print(
+                    f"Warning: Weighted sampling failed ({e}), using uniform sampling"
+                )
+                batch = random.sample(self.buffer, batch_size)
+        else:
+            # Uniform random sampling (original behavior)
+            batch = random.sample(self.buffer, batch_size)
 
         if self.memory_efficient:
             # Convert FEN strings back to Board objects
@@ -229,12 +286,22 @@ class ReplayBuffer:
 
         print(f"✅ Loaded {len(self.buffer)} examples from {filepath}")
 
-    def get_statistics(self) -> Dict[str, Union[int, float]]:
+    def get_stats(self) -> Dict[str, float]:
         """
-        Get buffer statistics.
+        Get statistics about buffer contents.
+        Now includes outcome distribution stats!
 
         Returns:
-            Dictionary with statistics about buffer contents
+            Dictionary with statistics:
+            - size: Current number of examples
+            - capacity: Maximum size
+            - fill_percentage: How full the buffer is
+            - avg_value: Average value (should be near 0)
+            - value_std: Standard deviation of values
+            - positive_ratio: Fraction of winning positions
+            - negative_ratio: Fraction of losing positions
+            - draw_ratio: Fraction of drawn positions
+            - decisive_ratio: Fraction of decisive games (wins + losses)
         """
         if len(self.buffer) == 0:
             return {
@@ -242,10 +309,19 @@ class ReplayBuffer:
                 "capacity": self.max_size,
                 "fill_percentage": 0.0,
                 "avg_value": 0.0,
+                "value_std": 0.0,
                 "positive_ratio": 0.0,
+                "negative_ratio": 0.0,
+                "draw_ratio": 0.0,
+                "decisive_ratio": 0.0,
             }
 
         values = [example["value"] for example in self.buffer]
+
+        positive_count = sum(1 for v in values if v > 0.1)
+        negative_count = sum(1 for v in values if v < -0.1)
+        draw_count = sum(1 for v in values if abs(v) <= 0.1)
+        decisive_count = positive_count + negative_count
 
         return {
             "size": len(self.buffer),
@@ -253,9 +329,10 @@ class ReplayBuffer:
             "fill_percentage": float(len(self.buffer) / self.max_size * 100),
             "avg_value": float(np.mean(values)),
             "value_std": float(np.std(values)),
-            "positive_ratio": float(np.mean([value > 0 for value in values])),
-            "negative_ratio": float(np.mean([value < 0 for value in values])),
-            "draw_ratio": float(np.mean([value == 0 for value in values])),
+            "positive_ratio": float(positive_count / len(values)),
+            "negative_ratio": float(negative_count / len(values)),
+            "draw_ratio": float(draw_count / len(values)),
+            "decisive_ratio": float(decisive_count / len(values)),
         }
 
 

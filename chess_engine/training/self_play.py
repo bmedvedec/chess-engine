@@ -16,6 +16,7 @@ This is the core of AlphaZero's training approach.
 import os
 import sys
 import time
+import random
 from typing import List, Dict, Tuple, Optional
 import pickle
 from dataclasses import dataclass
@@ -59,6 +60,14 @@ class SelfPlayConfig:
     dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
     resign_threshold: float = DEFAULT_RESIGN_THRESHOLD
 
+    # ASYMMETRIC SELF-PLAY PARAMETERS (to break symmetry and reduce draws)
+    asymmetric_play: bool = True  # Enable asymmetric self-play
+    white_temperature: Optional[float] = None  # Override temperature for white
+    black_temperature: Optional[float] = None  # Override temperature for black
+    temperature_variation: float = 0.0  # Random variation (e.g., 0.5 = ±0.5 range)
+    use_old_opponent_prob: float = 0.0  # Prob of using old model for black (0.0-1.0)
+    old_model_path: Optional[str] = None  # Path to older checkpoint for mixed opponents
+
     @classmethod
     def from_args(cls, args) -> "SelfPlayConfig":
         """Create config from command line arguments"""
@@ -75,6 +84,13 @@ class SelfPlayConfig:
             resign_threshold=getattr(
                 args, "resign_threshold", DEFAULT_RESIGN_THRESHOLD
             ),
+            # Asymmetric play parameters
+            asymmetric_play=getattr(args, "asymmetric_play", True),
+            white_temperature=getattr(args, "white_temperature", None),
+            black_temperature=getattr(args, "black_temperature", None),
+            temperature_variation=getattr(args, "temperature_variation", 0.0),
+            use_old_opponent_prob=getattr(args, "use_old_opponent_prob", 0.0),
+            old_model_path=getattr(args, "old_model_path", None),
         )
 
 
@@ -167,16 +183,19 @@ class SelfPlayWorker:
         model: nn.Module,
         device: torch.device,
         config: Optional[SelfPlayConfig] = None,
+        old_model: Optional[nn.Module] = None,
     ):
         """
         Initialize self-play worker.
 
         Args:
-            model: Neural network model
+            model: Neural network model (current/primary model)
             device: Device (cuda/cpu)
             config: Self-play configuration
+            old_model: Optional older model for mixed opponent asymmetric play
         """
         self.model = model
+        self.old_model = old_model
         self.device = (
             device if isinstance(device, torch.device) else torch.device(device)
         )
@@ -186,7 +205,7 @@ class SelfPlayWorker:
         self.board_encoder = BoardEncoder()
         self.move_encoder = MoveEncoder()
 
-        # Create MCTS with exploration parameters
+        # Create primary MCTS (will be used for white, or both if not asymmetric)
         self.mcts = MCTS(
             model=model,
             board_encoder=self.board_encoder,
@@ -200,6 +219,12 @@ class SelfPlayWorker:
             dirichlet_epsilon=0.25,  # 25% noise at root
             dirichlet_alpha=self.config.dirichlet_alpha,
         )
+
+        # Create secondary MCTS for asymmetric play (black player)
+        self.mcts_black = None
+        if self.config.asymmetric_play:
+            # Will be initialized per-game based on opponent selection
+            pass
 
     def _extract_policy(
         self, board: chess.Board, stats: Optional[Dict]
@@ -277,7 +302,7 @@ class SelfPlayWorker:
         self, max_moves: int = 200, verbose: bool = False
     ) -> Tuple[List[GameExample], str, bool]:
         """
-        Play one self-play game.
+        Play one self-play game with asymmetric play support.
 
         Args:
             max_moves: Maximum moves before declaring draw
@@ -294,6 +319,70 @@ class SelfPlayWorker:
         move_count = 0
         resigned = False
 
+        # Initialize default temperatures
+        white_temp_base = self.config.temperature
+        black_temp_base = self.config.temperature
+
+        # ASYMMETRIC SELF-PLAY: Initialize different MCTS engines for white/black
+        use_old_for_black = False
+        if self.config.asymmetric_play:
+            # Decide if black uses old model (mixed opponent)
+            if (
+                self.old_model is not None
+                and random.random() < self.config.use_old_opponent_prob
+            ):
+                use_old_for_black = True
+                black_model = self.old_model
+                if verbose:
+                    print("   🔀 Black using old model for diversity")
+            else:
+                black_model = self.model
+
+            # Determine temperatures for white and black
+            white_temp_base = (
+                self.config.white_temperature
+                if self.config.white_temperature is not None
+                else self.config.temperature
+            )
+            black_temp_base = (
+                self.config.black_temperature
+                if self.config.black_temperature is not None
+                else self.config.temperature
+            )
+
+            # Add random variation if configured
+            if self.config.temperature_variation > 0:
+                white_temp_base += random.uniform(
+                    -self.config.temperature_variation,
+                    self.config.temperature_variation,
+                )
+                black_temp_base += random.uniform(
+                    -self.config.temperature_variation,
+                    self.config.temperature_variation,
+                )
+                # Clamp to reasonable range
+                white_temp_base = max(0.1, min(5.0, white_temp_base))
+                black_temp_base = max(0.1, min(5.0, black_temp_base))
+
+            # Create MCTS for black if needed
+            self.mcts_black = MCTS(
+                model=black_model,
+                board_encoder=self.board_encoder,
+                move_encoder=self.move_encoder,
+                device=self.device,
+                num_simulations=self.config.num_simulations,
+                c_puct=self.config.c_puct,
+                temperature=black_temp_base,
+                use_rnn=self.config.use_rnn,
+                dirichlet_epsilon=0.25,
+                dirichlet_alpha=self.config.dirichlet_alpha,
+            )
+
+            if verbose:
+                print(
+                    f"   ⚖️  Asymmetric play: White temp={white_temp_base:.2f}, Black temp={black_temp_base:.2f}"
+                )
+
         if verbose:
             print("\n🎮 Starting self-play game...")
 
@@ -301,17 +390,30 @@ class SelfPlayWorker:
             while not board.is_game_over() and move_count < max_moves:
                 move_count += 1
 
+                # Select MCTS engine based on current player
+                if self.config.asymmetric_play and self.mcts_black is not None:
+                    if board.turn == chess.WHITE:
+                        current_mcts = self.mcts
+                        temp_base = white_temp_base
+                    else:
+                        current_mcts = self.mcts_black
+                        temp_base = black_temp_base
+                else:
+                    # Fallback to symmetric play if asymmetric not properly initialized
+                    current_mcts = self.mcts
+                    temp_base = self.config.temperature
+
                 # Adjust temperature (exploration vs exploitation)
                 if move_count < self.config.temperature_threshold:
-                    temp = self.config.temperature
+                    temp = temp_base
                 else:
                     temp = self.config.late_game_temperature
 
-                self.mcts.temperature = temp
+                current_mcts.temperature = temp
 
                 try:
                     # Run MCTS
-                    move, stats = self.mcts.search(board, return_stats=True)
+                    move, stats = current_mcts.search(board, return_stats=True)
 
                     if stats is None or move not in board.legal_moves:
                         raise ValueError(f"MCTS returned illegal move: {move}")
@@ -363,6 +465,8 @@ class SelfPlayWorker:
                 print(f"   Game over: {result}")
                 if resigned:
                     print(f"   (Resigned)")
+                if use_old_for_black:
+                    print(f"   (Black used old model)")
                 print(f"   Collected {len(examples)} training examples")
 
             return examples, result, resigned
@@ -700,6 +804,44 @@ def main():
         help="Resign threshold",
     )  # NEW
 
+    # ASYMMETRIC SELF-PLAY ARGUMENTS
+    parser.add_argument(
+        "--asymmetric-play",
+        action="store_true",
+        default=True,
+        help="Enable asymmetric self-play (different temps for white/black)",
+    )
+    parser.add_argument(
+        "--white-temperature",
+        type=float,
+        default=None,
+        help="Temperature for white (overrides --temperature)",
+    )
+    parser.add_argument(
+        "--black-temperature",
+        type=float,
+        default=None,
+        help="Temperature for black (overrides --temperature)",
+    )
+    parser.add_argument(
+        "--temperature-variation",
+        type=float,
+        default=0.0,
+        help="Random temperature variation range (e.g., 0.5 = ±0.5)",
+    )
+    parser.add_argument(
+        "--use-old-opponent-prob",
+        type=float,
+        default=0.0,
+        help="Probability of using old model for black (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--old-model-path",
+        type=str,
+        default=None,
+        help="Path to old model checkpoint for mixed opponents",
+    )
+
     args = parser.parse_args()
 
     config = SelfPlayConfig.from_args(args)
@@ -727,6 +869,7 @@ def main():
             "cpu" if args.cpu else ("cuda" if torch.cuda.is_available() else "cpu")
         )
 
+        # Load current model
         model = HybridChessNet(use_rnn=args.use_rnn)
         checkpoint = torch.load(args.model, map_location=device)
 
@@ -738,7 +881,27 @@ def main():
         model.to(device)
         model.eval()
 
-        worker = SelfPlayWorker(model=model, device=device, config=config)
+        # Load old model if specified for mixed opponents
+        old_model = None
+        if config.old_model_path and config.use_old_opponent_prob > 0:
+            print(f"📂 Loading old model from {config.old_model_path}...")
+            old_model = HybridChessNet(use_rnn=args.use_rnn)
+            old_checkpoint = torch.load(config.old_model_path, map_location=device)
+
+            if "model_state_dict" in old_checkpoint:
+                old_model.load_state_dict(old_checkpoint["model_state_dict"])
+            else:
+                old_model.load_state_dict(old_checkpoint)
+
+            old_model.to(device)
+            old_model.eval()
+            print(
+                f"✅ Old model loaded (will be used {config.use_old_opponent_prob*100:.0f}% of games)"
+            )
+
+        worker = SelfPlayWorker(
+            model=model, device=device, config=config, old_model=old_model
+        )
         examples = worker.play_games(
             num_games=args.games,
             buffer=buffer,

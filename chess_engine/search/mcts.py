@@ -501,7 +501,8 @@ class MCTS:
                 move_history = move_history.unsqueeze(0).to(self.device)
 
                 # Get actual sequence length (not padded length)
-                actual_length = min(len(board.move_stack), 50)
+                # Ensure minimum length of 1 to avoid pack_padded_sequence error
+                actual_length = max(1, min(len(board.move_stack), 50))
                 seq_length = torch.LongTensor([actual_length])
 
                 policy_logits, value, _ = self.model(
@@ -555,7 +556,8 @@ class MCTS:
                     )
                     move_histories.append(move_history)
 
-                    actual_length = min(len(node.board.move_stack), 50)
+                    # Ensure minimum length of 1 to avoid pack_padded_sequence error
+                    actual_length = max(1, min(len(node.board.move_stack), 50))
                     seq_lengths.append(actual_length)
 
                 move_histories = torch.stack(move_histories).to(self.device)
