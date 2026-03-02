@@ -14,6 +14,20 @@ from chess_engine.data.dataset.stats import (
 )
 from chess_engine.data.dataset.storage import save_dataset, load_dataset
 
+from chess_engine.data.replay.storage import (
+    GameExample,
+    convert_policy_dict_to_tensor,
+    convert_policy_tensor_to_dict,
+)
+from chess_engine.data.replay.buffer import ReplayBuffer
+from chess_engine.data.replay.prioritized import PrioritizedReplayBuffer
+from chess_engine.data.replay.sampling import prioritized_sample
+from chess_engine.data.replay.serialization import (
+    save_replay_buffer,
+    load_replay_buffer,
+)
+
+
 __all__ = [
     # Dataset
     "ChessGameParser",
@@ -24,4 +38,13 @@ __all__ = [
     "print_dataset_statistics",
     "save_dataset",
     "load_dataset",
+    # Replay
+    "GameExample",
+    "convert_policy_dict_to_tensor",
+    "convert_policy_tensor_to_dict",
+    "ReplayBuffer",
+    "PrioritizedReplayBuffer",
+    "prioritized_sample",
+    "save_replay_buffer",
+    "load_replay_buffer",
 ]
