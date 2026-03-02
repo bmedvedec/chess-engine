@@ -1,5 +1,5 @@
 """
-CHAPTER 2: MOVE REPRESENTATION & ENCODING
+MOVE REPRESENTATION & ENCODING
 Complete Track Implementation
 
 This module handles conversion between chess.Move objects and numerical indices.
@@ -13,6 +13,10 @@ import chess
 import torch
 import numpy as np
 from typing import List, Dict, Tuple, Optional, Union
+
+# Constants
+NUM_MOVES = 4096  # 64 from_squares * 64 to_squares
+PAD_INDEX = 0  # Padding index for move sequences
 
 
 class MoveEncoder:
@@ -201,161 +205,3 @@ class MoveEncoder:
 
         best_move = max(move_probs.items(), key=lambda x: x[1])
         return best_move
-
-
-class MoveHistory:
-    """
-    Manages move history for RNN input.
-    Handles variable-length sequences with padding.
-    """
-
-    def __init__(self, max_length: int = 50):
-        """
-        Initialize move history manager.
-
-        Args:
-            max_length: Maximum number of moves to keep in history
-        """
-        self.max_length = max_length
-        self.encoder = MoveEncoder()
-
-    def encode_move_sequence(
-        self, moves: List[chess.Move], pad: bool = True
-    ) -> torch.Tensor:
-        """
-        Encode a sequence of moves to indices.
-
-        Args:
-            moves: List of chess.Move objects
-            pad: Whether to pad to max_length
-
-        Returns:
-            torch.LongTensor of shape (seq_length,) or (max_length,) if padded
-        """
-        # Take only the most recent moves
-        recent_moves = (
-            moves[-self.max_length :] if len(moves) > self.max_length else moves
-        )
-
-        # Encode moves
-        encoded = [self.encoder.encode_move(move) for move in recent_moves]
-
-        if pad:
-            # Pad at the beginning with zeros
-            padded = [0] * (self.max_length - len(encoded)) + encoded
-            return torch.LongTensor(padded)
-        else:
-            return torch.LongTensor(encoded)
-
-    def encode_game_history(self, board: chess.Board, pad: bool = True) -> torch.Tensor:
-        """
-        Encode the move history from a chess.Board.
-
-        Args:
-            board: chess.Board object
-            pad: Whether to pad to max_length
-
-        Returns:
-            torch.LongTensor of move indices
-        """
-        # Get move stack from board
-        moves = list(board.move_stack)
-        return self.encode_move_sequence(moves, pad=pad)
-
-    def batch_encode_histories(
-        self, boards: List[chess.Board], pad: bool = True
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Encode move histories for a batch of boards.
-
-        Args:
-            boards: List of chess.Board objects
-            pad: Whether to pad sequences
-
-        Returns:
-            Tuple of (encoded_sequences, lengths)
-            - encoded_sequences: torch.LongTensor of shape (batch, max_length)
-            - lengths: torch.LongTensor of shape (batch,) containing actual lengths
-        """
-        sequences = []
-        lengths = []
-
-        for board in boards:
-            moves = list(board.move_stack)
-            seq_length = min(len(moves), self.max_length)
-            lengths.append(seq_length)
-
-            encoded = self.encode_move_sequence(moves, pad=pad)
-            sequences.append(encoded)
-
-        sequences = torch.stack(sequences)
-        lengths = torch.LongTensor(lengths)
-
-        return sequences, lengths
-
-    def decode_move_sequence(
-        self, encoded: Union[torch.Tensor, np.ndarray], length: Optional[int] = None
-    ) -> List[chess.Move]:
-        """
-        Decode a sequence of move indices back to moves.
-
-        Args:
-            encoded: torch.LongTensor of move indices
-            length: Actual length (ignores padding)
-
-        Returns:
-            List of chess.Move objects
-        """
-        if isinstance(encoded, torch.Tensor):
-            encoded = encoded.cpu().numpy()
-
-        if length is not None:
-            # Remove padding
-            encoded = encoded[-length:]
-
-        moves = []
-        for idx in encoded:
-            if idx > 0:  # Skip padding (index 0)
-                move = self.encoder.decode_move(int(idx))
-                moves.append(move)
-
-        return moves
-
-
-def create_policy_target(
-    board: chess.Board, target_move: chess.Move, smooth: float = 0.0
-) -> torch.Tensor:
-    """
-    Create a target policy vector for supervised learning.
-
-    Args:
-        board: chess.Board object
-        target_move: The correct move to play
-        smooth: Label smoothing factor (0 = no smoothing)
-
-    Returns:
-        torch.Tensor of shape (4096,) with target probabilities
-    """
-    encoder = MoveEncoder()
-    target = torch.zeros(encoder.num_moves)
-
-    # Get legal moves for smoothing
-    legal_moves = list(board.legal_moves)
-    num_legal = len(legal_moves)
-
-    if smooth > 0 and num_legal > 1:
-        # Distribute smooth probability among all legal moves
-        smooth_prob = smooth / num_legal
-        for move in legal_moves:
-            index = encoder.encode_move(move)
-            target[index] = smooth_prob
-
-        # Add remaining probability to target move
-        target_index = encoder.encode_move(target_move)
-        target[target_index] += 1.0 - smooth
-    else:
-        # One-hot encoding
-        target_index = encoder.encode_move(target_move)
-        target[target_index] = 1.0
-
-    return target
