@@ -1,7 +1,7 @@
 """
-Search Package
+MCTS Package
 
-Re-exports all public classes and functions from the search module.
+Re-exports all public classes and functions from the MCTS module.
 """
 
 from chess_engine.search.mcts.node import MCTSNode
