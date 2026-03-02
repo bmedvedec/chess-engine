@@ -2,24 +2,32 @@
 Chess Engine Models Package
 """
 
-from .chess_cnn import (
+from chess_engine.models.cnn import (
     ChessResidualBlock,
     ChessCNN,
     PolicyHead,
     ValueHead,
     ChessNet,
-    count_parameters as count_cnn_parameters,
+    count_parameters,
 )
 
-from .chess_rnn import (
+from chess_engine.models.rnn import (
     MoveEmbedding,
-    ChessLSTM,
+    LSTMCore,
     AttentionLayer,
     ChessRNN,
-    count_parameters as count_rnn_parameters,
+    PositionalEncoding,
+    ContextExtractor,
+    RNNCache,
 )
 
-from .hybrid_model import FeatureFusion, HybridChessNet, count_parameters
+from chess_engine.models.hybrid import (
+    FeatureFusion,
+    HybridChessNet,
+    HybridModelConfig,
+    BenchmarkResult,
+    benchmark_inference,
+)
 
 __all__ = [
     # CNN components
@@ -28,16 +36,19 @@ __all__ = [
     "PolicyHead",
     "ValueHead",
     "ChessNet",
+    "count_parameters",
     # RNN components
     "MoveEmbedding",
-    "ChessLSTM",
     "AttentionLayer",
     "ChessRNN",
+    "PositionalEncoding",
+    "ContextExtractor",
+    "RNNCache",
+    "LSTMCore",
     # Hybrid model
     "FeatureFusion",
     "HybridChessNet",
-    "count_parameters",
-    # Utils
-    "count_cnn_parameters",
-    "count_rnn_parameters",
+    "HybridModelConfig",
+    "BenchmarkResult",
+    "benchmark_inference",
 ]

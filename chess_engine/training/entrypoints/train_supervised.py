@@ -7,8 +7,6 @@ Usage:
 
 import os
 
-from chess_engine.models.hybrid.config import HybridModelConfig
-
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # Suppress TensorFlow logs
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # Disable oneDNN messages
@@ -23,9 +21,8 @@ from tqdm import tqdm
 from chess_engine.training.trainer import ChessTrainer
 from chess_engine.models.cnn.utils import count_parameters
 from chess_engine.models.hybrid.hybrid_net import HybridChessNet
-
-# from chess_engine.models.hybrid_model_old import HybridChessNet, count_parameters
-from chess_engine.data.chess_dataset import (
+from chess_engine.models.hybrid.config import HybridModelConfig
+from chess_engine.data.dataset import (
     ChessDataset,
     load_dataset,
     create_dataloader,
@@ -272,7 +269,7 @@ if __name__ == "__main__":
         print("\nTesting with sample data...")
 
         # Create sample data if needed
-        from chess_engine.data.chess_dataset import (
+        from chess_engine.data.dataset import (
             ChessGameParser,
             save_dataset,
         )

@@ -1,7 +1,7 @@
 """
-Data Package
+Dataset Package
 
-Re-exports all public classes and functions from the data module.
+Re-exports all public classes and functions from the dataset module.
 """
 
 from chess_engine.data.dataset.pgn_parser import ChessGameParser
@@ -13,6 +13,7 @@ from chess_engine.data.dataset.stats import (
     print_dataset_statistics,
 )
 from chess_engine.data.dataset.storage import save_dataset, load_dataset
+
 
 __all__ = [
     # Dataset
