@@ -77,6 +77,6 @@ def tensor_to_board(self, tensor: Union[torch.Tensor, np.ndarray]) -> chess.Boar
     board.halfmove_clock = int(tensor[19, 0, 0] * 100)
 
     # Set fullmove number
-    board.fullmove_number = int(tensor[13, 0, 0] * 100)
+    board.fullmove_number = int(tensor[13, 0, 0] * 200)
 
     return board

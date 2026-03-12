@@ -83,7 +83,7 @@ class BoardEncoder:
         tensor[12, :, :] = float(board.turn)
 
         # Channel 13: Total move count (normalized)
-        tensor[13, :, :] = board.fullmove_number / 100.0
+        tensor[13, :, :] = board.fullmove_number / 200.0
 
         # Channels 14-17: Castling rights
         tensor[14, :, :] = float(board.has_kingside_castling_rights(chess.WHITE))
