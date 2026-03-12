@@ -67,7 +67,7 @@ class RLTrainingConfig:
     rnn_bidirectional: bool = False
 
     fusion_type: Literal["concat", "gated", "attention"] = "gated"
-    num_actions: int = 4096  # 4096 or 4672
+    num_actions: int = 4672  # AlphaZero-style: 64 squares × 73 move types
 
     # =====================
     # Training hyperparameters

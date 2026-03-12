@@ -34,7 +34,7 @@ class ChessNet(nn.Module):
         input_channels: int = 20,
         num_filters: int = 256,
         num_residual_blocks: int = 10,
-        num_actions: int = 4096,
+        num_actions: int = 4672,
         dropout: float = 0.0,
         device: Optional[Union[str, torch.device]] = None,
     ):
@@ -45,7 +45,7 @@ class ChessNet(nn.Module):
             input_channels: Number of input channels (default: 20)
             num_filters: Number of CNN filters (default: 256)
             num_residual_blocks: Number of residual blocks (default: 10)
-            num_actions: Number of possible moves (default: 4096)
+            num_actions: Number of possible moves (default: 4672)
             dropout: Dropout probability (default: 0.0)
             device: Device to use ('cuda' or 'cpu', auto-detect if None)
         """

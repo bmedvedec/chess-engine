@@ -66,7 +66,7 @@ class RLDataset(Dataset):
         board_tensor = self.board_encoder.board_to_tensor(board)
 
         # Encode policy
-        policy_tensor = torch.zeros(4096)
+        policy_tensor = torch.zeros(self.move_encoder.num_moves)
         for move_uci, prob in policy_dict.items():
             try:
                 move = chess.Move.from_uci(move_uci)

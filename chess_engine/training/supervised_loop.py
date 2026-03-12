@@ -35,7 +35,7 @@ def compute_loss(
     Also computes Top-1, Top-3, Top-5 accuracy and Value MAE.
 
     Args:
-        policy_logits: Model policy output (batch, 4096)
+        policy_logits: Model policy output (batch, 4672)
         value_pred: Model value output (batch, 1)
         move_targets: Target move indices (batch,)
         outcome_targets: Game outcomes (batch,)

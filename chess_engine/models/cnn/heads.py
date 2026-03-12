@@ -1,7 +1,7 @@
 """
 CNN ARCHITECTURE - Policy and Value Heads
 
-Policy Head: Takes CNN features (256, 8, 8) and outputs move probabilities (4096,).
+Policy Head: Takes CNN features (256, 8, 8) and outputs move probabilities (4672,).
 Value Head: Takes CNN features (256, 8, 8) and outputs position evaluation [-1, 1].
 """
 
@@ -27,19 +27,16 @@ class PolicyHead(nn.Module):
          ↓
     Logits for each possible move
 
-    Note: Using 4672 moves (AlphaZero-style encoding) but we'll start with
-    simpler 4096 (64×64) encoding. Can be upgraded later.
+    Uses 4672 moves (AlphaZero-style encoding: 64 squares × 73 move types).
     """
 
-    # TODO: upgrade to 4096 moves
-
-    def __init__(self, input_channels: int = 256, num_actions: int = 4096):
+    def __init__(self, input_channels: int = 256, num_actions: int = 4672):
         """
         Initialize policy head.
 
         Args:
             input_channels: Number of input channels from CNN (default: 256)
-            num_actions: Number of possible moves (default: 4096)
+            num_actions: Number of possible moves (default: 4672)
         """
         super().__init__()
 

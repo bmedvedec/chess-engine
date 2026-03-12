@@ -11,7 +11,7 @@ class HybridModelConfig:
     cnn_dropout: float = 0.0
 
     # ===== RNN =====
-    rnn_num_moves: int = 4096
+    rnn_num_moves: int = 4672
     rnn_embedding_dim: int = 64
     rnn_hidden_size: int = 256
     rnn_num_layers: int = 2
@@ -25,7 +25,7 @@ class HybridModelConfig:
     fusion_type: Literal["concat", "gated", "attention"] = "gated"
 
     # ===== Output =====
-    num_actions: int = 4096
+    num_actions: int = 4672
 
     # ===== Mode =====
     use_rnn: bool = True

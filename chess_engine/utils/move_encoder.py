@@ -1,49 +1,182 @@
 """
 MOVE REPRESENTATION & ENCODING
-Complete Track Implementation
+AlphaZero-style 4,672 move encoding
 
 This module handles conversion between chess.Move objects and numerical indices.
-We use a simplified encoding scheme: from_square * 64 + to_square = 4096 possible moves.
+Uses AlphaZero encoding scheme: from_square * 73 + move_type = 4,672 possible moves.
 
-For a more sophisticated approach (AlphaZero-style with 73 move types per square),
-this can be extended later.
+Move types (73 total per square):
+  0-55:  Queen-style moves — 8 directions × 7 distances
+  56-63: Knight moves — 8 L-shaped offsets
+  64-72: Underpromotions — 3 directions × 3 pieces (knight, bishop, rook)
+         Queen promotions are encoded via the matching queen-style move type.
+
+Queen direction order (dir_idx → rank_delta, file_delta):
+  0: N  (+1,  0)   4: S  (-1,  0)
+  1: NE (+1, +1)   5: SW (-1, -1)
+  2: E  ( 0, +1)   6: W  ( 0, -1)
+  3: SE (-1, +1)   7: NW (+1, -1)
+
+Knight move order (56 + k_idx → rank_delta, file_delta):
+  0:(+2,+1)  1:(+2,-1)  2:(+1,+2)  3:(+1,-2)
+  4:(-1,+2)  5:(-1,-2)  6:(-2,+1)  7:(-2,-1)
+
+Underpromotion order (64 + dir_idx*3 + piece_idx):
+  dir_idx: 0=left(file-1), 1=straight(file±0), 2=right(file+1)
+  piece_idx: 0=knight, 1=bishop, 2=rook
 """
 
 import chess
 import torch
 import numpy as np
-from typing import List, Dict, Tuple, Optional, Union
+from typing import List, Dict, Tuple, Optional
 
-# Constants
-NUM_MOVES = 4096  # 64 from_squares * 64 to_squares
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+NUM_MOVES = 4672  # 64 from_squares × 73 move types
+NUM_MOVE_TYPES = 73
 PAD_INDEX = 0  # Padding index for move sequences
+
+# Queen-style directions: (rank_delta, file_delta)
+QUEEN_DIRECTIONS: List[Tuple[int, int]] = [
+    (+1, 0),  # 0: N
+    (+1, +1),  # 1: NE
+    (0, +1),  # 2: E
+    (-1, +1),  # 3: SE
+    (-1, 0),  # 4: S
+    (-1, -1),  # 5: SW
+    (0, -1),  # 6: W
+    (+1, -1),  # 7: NW
+]
+
+# Knight move offsets: (rank_delta, file_delta)
+KNIGHT_DELTAS: List[Tuple[int, int]] = [
+    (+2, +1),
+    (+2, -1),
+    (+1, +2),
+    (+1, -2),
+    (-1, +2),
+    (-1, -2),
+    (-2, +1),
+    (-2, -1),
+]
+
+# Underpromotion pieces in order (piece_idx → chess piece type)
+UNDERPROMOTION_PIECES = [chess.KNIGHT, chess.BISHOP, chess.ROOK]
+
+# Underpromotion file deltas (dir_idx → file offset)
+UNDERPROMOTION_FILE_DELTAS = [-1, 0, +1]  # left, straight, right
 
 
 class MoveEncoder:
     """
     Encodes chess moves into numerical indices for neural network processing.
 
-    Simple encoding scheme:
-    - move_index = from_square * 64 + to_square
-    - Total possible moves: 64 * 64 = 4096
+    AlphaZero encoding scheme:
+    - move_index = from_square * 73 + move_type
+    - Total possible moves: 64 * 73 = 4,672
 
-    Note: This includes illegal moves (e.g., a1 to a1), but simplifies implementation.
-    The policy network will learn to assign near-zero probability to illegal moves.
+    Move types (73 per square):
+      0-55:  Queen-style (8 directions × 7 distances)
+      56-63: Knight moves (8 L-shaped offsets)
+      64-72: Underpromotions (3 directions × 3 pieces: knight/bishop/rook)
+
+    Queen promotions share the same index as the corresponding 1-square queen-style
+    move toward the back rank; decode_move resolves the promotion via the board.
     """
 
     def __init__(self):
-        """Initialize the move encoder"""
-        self.num_moves = 4096  # 64 from_squares * 64 to_squares
+        """Initialize the move encoder with precomputed lookup tables."""
+        self.num_moves = NUM_MOVES
 
-        # Pre-compute move to index mapping
-        self.move_to_index = {}
-        self.index_to_move_template = {}
+        # (from_sq, to_sq, promotion_or_None) → index
+        self._encode_table: Dict[Tuple[int, int, Optional[int]], int] = {}
+        # index → chess.Move  (queen promotions stored without promotion field;
+        # decode_move adds it when a board is supplied)
+        self._decode_table: Dict[int, chess.Move] = {}
 
-        for from_square in range(64):
-            for to_square in range(64):
-                index = from_square * 64 + to_square
-                self.move_to_index[(from_square, to_square)] = index
-                self.index_to_move_template[index] = (from_square, to_square)
+        self._build_tables()
+
+    # ------------------------------------------------------------------
+    # Table construction
+    # ------------------------------------------------------------------
+
+    def _build_tables(self) -> None:
+        """Precompute encode/decode lookup tables for all valid move indices."""
+        for from_sq in range(64):
+            from_rank = from_sq // 8
+            from_file = from_sq % 8
+
+            # --------------------------------------------------------------
+            # Queen-style moves (move types 0–55)
+            # --------------------------------------------------------------
+            for dir_idx, (dr, df) in enumerate(QUEEN_DIRECTIONS):
+                for dist in range(1, 8):
+                    to_rank = from_rank + dr * dist
+                    to_file = from_file + df * dist
+                    if not (0 <= to_rank <= 7 and 0 <= to_file <= 7):
+                        # Off-board; further distances in this direction also invalid
+                        break
+                    to_sq = to_rank * 8 + to_file
+                    move_type = dir_idx * 7 + (dist - 1)
+                    index = from_sq * NUM_MOVE_TYPES + move_type
+
+                    # Decode: store basic move (no promotion); decode_move adds
+                    # queen promotion contextually when a board is supplied.
+                    self._decode_table[index] = chess.Move(from_sq, to_sq)
+
+                    # Encode: non-promotion use (any piece including pawns not promoting)
+                    self._encode_table[(from_sq, to_sq, None)] = index
+
+                    # Encode: queen-promotion variant for pawn promotion squares
+                    is_white_promo = from_rank == 6 and to_rank == 7
+                    is_black_promo = from_rank == 1 and to_rank == 0
+                    if is_white_promo or is_black_promo:
+                        self._encode_table[(from_sq, to_sq, chess.QUEEN)] = index
+
+            # --------------------------------------------------------------
+            # Knight moves (move types 56–63)
+            # --------------------------------------------------------------
+            for k_idx, (dr, df) in enumerate(KNIGHT_DELTAS):
+                to_rank = from_rank + dr
+                to_file = from_file + df
+                if not (0 <= to_rank <= 7 and 0 <= to_file <= 7):
+                    continue
+                to_sq = to_rank * 8 + to_file
+                move_type = 56 + k_idx
+                index = from_sq * NUM_MOVE_TYPES + move_type
+                self._decode_table[index] = chess.Move(from_sq, to_sq)
+                self._encode_table[(from_sq, to_sq, None)] = index
+
+            # --------------------------------------------------------------
+            # Underpromotions (move types 64–72)
+            # Only valid from rank 6 (white) or rank 1 (black)
+            # --------------------------------------------------------------
+            for dir_idx, df in enumerate(UNDERPROMOTION_FILE_DELTAS):
+                for piece_idx, piece in enumerate(UNDERPROMOTION_PIECES):
+                    move_type = 64 + dir_idx * 3 + piece_idx
+                    index = from_sq * NUM_MOVE_TYPES + move_type
+
+                    if from_rank == 6:  # White pawn: rank 6 → 7
+                        to_file = from_file + df
+                        if 0 <= to_file <= 7:
+                            to_sq = 7 * 8 + to_file
+                            promo_move = chess.Move(from_sq, to_sq, promotion=piece)
+                            self._decode_table[index] = promo_move
+                            self._encode_table[(from_sq, to_sq, piece)] = index
+
+                    elif from_rank == 1:  # Black pawn: rank 1 → 0
+                        to_file = from_file + df
+                        if 0 <= to_file <= 7:
+                            to_sq = 0 * 8 + to_file
+                            promo_move = chess.Move(from_sq, to_sq, promotion=piece)
+                            self._decode_table[index] = promo_move
+                            self._encode_table[(from_sq, to_sq, piece)] = index
+
+    # ------------------------------------------------------------------
+    # Core encode / decode
+    # ------------------------------------------------------------------
 
     def encode_move(self, move: chess.Move) -> int:
         """
@@ -53,9 +186,9 @@ class MoveEncoder:
             move: chess.Move object
 
         Returns:
-            Integer index in range [0, 4095]
+            Integer index in range [0, 4671]
         """
-        return self.move_to_index[(move.from_square, move.to_square)]
+        return self._encode_table[(move.from_square, move.to_square, move.promotion)]
 
     def decode_move(
         self, index: int, board: Optional[chess.Board] = None
@@ -63,33 +196,36 @@ class MoveEncoder:
         """
         Decode an integer index to a chess move.
 
+        Queen promotions are resolved when a board is provided; without a board
+        the returned move has no promotion field (correct for all non-pawn moves).
+        Underpromotions always carry the correct promotion piece regardless of board.
+
         Args:
-            index: Integer index in range [0, 4095]
-            board: Optional chess.Board to validate the move
+            index: Integer index in range [0, 4671]
+            board: Optional chess.Board to resolve queen promotions
 
         Returns:
             chess.Move object
         """
-        from_square, to_square = self.index_to_move_template[index]
+        move = self._decode_table[index]
 
-        # Create basic move
-        move = chess.Move(from_square, to_square)
-
-        # If board provided, check for promotions
-        if board is not None:
-            piece = board.piece_at(from_square)
+        # Add queen promotion when the moving piece is a pawn reaching the back rank
+        if board is not None and move.promotion is None:
+            piece = board.piece_at(move.from_square)
             if piece and piece.piece_type == chess.PAWN:
-                # Check if pawn reaches back rank
-                to_rank = chess.square_rank(to_square)
+                to_rank = chess.square_rank(move.to_square)
                 if (piece.color == chess.WHITE and to_rank == 7) or (
                     piece.color == chess.BLACK and to_rank == 0
                 ):
-                    # Default to queen promotion
-                    move = chess.Move(from_square, to_square, promotion=chess.QUEEN)
-
-                    # TODO: implement other promotions
+                    move = chess.Move(
+                        move.from_square, move.to_square, promotion=chess.QUEEN
+                    )
 
         return move
+
+    # ------------------------------------------------------------------
+    # Batch helpers
+    # ------------------------------------------------------------------
 
     def encode_legal_moves(self, board: chess.Board) -> List[Tuple[chess.Move, int]]:
         """
@@ -101,11 +237,7 @@ class MoveEncoder:
         Returns:
             List of (move, index) tuples
         """
-        encoded_moves = []
-        for move in board.legal_moves:
-            index = self.encode_move(move)
-            encoded_moves.append((move, index))
-        return encoded_moves
+        return [(move, self.encode_move(move)) for move in board.legal_moves]
 
     def create_legal_moves_mask(self, board: chess.Board) -> torch.Tensor:
         """
@@ -115,57 +247,55 @@ class MoveEncoder:
             board: chess.Board object
 
         Returns:
-            torch.Tensor of shape (4096,) with 1s for legal moves, 0s otherwise
+            torch.Tensor of shape (4672,) with 1s for legal moves, 0s otherwise
         """
         mask = torch.zeros(self.num_moves)
         for move in board.legal_moves:
-            index = self.encode_move(move)
-            mask[index] = 1.0
+            mask[self.encode_move(move)] = 1.0
         return mask
 
     def policy_to_move_probs(
-        self, policy_logits: torch.Tensor, board: chess.Board, temperature: float = 1.0
+        self,
+        policy_logits: torch.Tensor,
+        board: chess.Board,
+        temperature: float = 1.0,
     ) -> Dict[chess.Move, float]:
         """
         Convert policy network output to move probabilities.
-        Only considers legal moves.
+        Only legal moves receive non-negligible probability.
 
         Args:
-            policy_logits: torch.Tensor of shape (4096,) - raw network output
+            policy_logits: torch.Tensor of shape (4672,) — raw network output
             board: chess.Board object for legal move filtering
             temperature: Temperature for softmax (higher = more random)
 
         Returns:
             Dictionary mapping chess.Move to probability
         """
-        # Apply temperature
         if temperature != 1.0:
             policy_logits = policy_logits / temperature
 
-        # Mask illegal moves (set to very negative value)
         legal_mask = self.create_legal_moves_mask(board)
         masked_logits = policy_logits.clone()
         masked_logits[legal_mask == 0] = -1e10
 
-        # Apply softmax
         probs = torch.softmax(masked_logits, dim=0)
 
-        # Convert to dictionary
-        move_probs = {}
-        for move in board.legal_moves:
-            index = self.encode_move(move)
-            move_probs[move] = probs[index].item()
-
-        return move_probs
+        return {
+            move: probs[self.encode_move(move)].item() for move in board.legal_moves
+        }
 
     def sample_move(
-        self, policy_logits: torch.Tensor, board: chess.Board, temperature: float = 1.0
+        self,
+        policy_logits: torch.Tensor,
+        board: chess.Board,
+        temperature: float = 1.0,
     ) -> chess.Move:
         """
         Sample a move from the policy distribution.
 
         Args:
-            policy_logits: torch.Tensor of shape (4096,)
+            policy_logits: torch.Tensor of shape (4672,)
             board: chess.Board object
             temperature: Temperature for sampling
 
@@ -173,20 +303,10 @@ class MoveEncoder:
             Sampled chess.Move
         """
         move_probs = self.policy_to_move_probs(policy_logits, board, temperature)
-
         moves = list(move_probs.keys())
-        probs = list(move_probs.values())
-
-        # Normalize (in case of floating point errors)
-        probs = np.array(probs)
+        probs = np.array(list(move_probs.values()))
         probs = probs / probs.sum()
-
-        # Sample move
-        indices = np.arange(len(moves))
-        chosen_idx = np.random.choice(indices, p=probs)
-        chosen_move = moves[chosen_idx]
-
-        return chosen_move
+        return moves[np.random.choice(len(moves), p=probs)]
 
     def get_best_move(
         self, policy_logits: torch.Tensor, board: chess.Board
@@ -195,13 +315,11 @@ class MoveEncoder:
         Get the move with highest probability.
 
         Args:
-            policy_logits: torch.Tensor of shape (4096,)
+            policy_logits: torch.Tensor of shape (4672,)
             board: chess.Board object
 
         Returns:
             Tuple of (best_move, probability)
         """
         move_probs = self.policy_to_move_probs(policy_logits, board, temperature=1.0)
-
-        best_move = max(move_probs.items(), key=lambda x: x[1])
-        return best_move
+        return max(move_probs.items(), key=lambda x: x[1])

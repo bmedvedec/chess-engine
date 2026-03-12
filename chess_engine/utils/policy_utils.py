@@ -16,7 +16,7 @@ def create_policy_target(
         smooth: Label smoothing factor (0 = no smoothing)
 
     Returns:
-        torch.Tensor of shape (4096,) with target probabilities
+        torch.Tensor of shape (4672,) with target probabilities
     """
     encoder = MoveEncoder()
     target = torch.zeros(encoder.num_moves)

@@ -18,8 +18,8 @@ def decode_move(index: int, board: Optional[chess.Board] = None) -> chess.Move:
     Convenience function that uses a shared MoveEncoder instance.
 
     Args:
-        index: Integer index in range [0, 4095]
-        board: Optional chess.Board to validate the move (handles promotions)
+        index: Integer index in range [0, 4671]
+        board: Optional chess.Board to resolve queen promotions
 
     Returns:
         chess.Move object
