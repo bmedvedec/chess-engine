@@ -97,7 +97,11 @@ class RLTrainingConfig:
     # Evaluation
     # =====================
     eval_frequency: int = 5
-    eval_games: int = 20
+    # 50 is the practical minimum for a statistically meaningful signal.
+    # At 20 games, a genuinely better model can easily lose by chance (high variance).
+    # With 50 games, the standard error on win rate drops to ~7%, making improvements
+    # above the win_threshold reliably detectable. Increase to 100 for more confidence.
+    eval_games: int = 50
     eval_simulations: int = 100
     win_threshold: float = 0.55
 
