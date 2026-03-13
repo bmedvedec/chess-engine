@@ -10,7 +10,7 @@ def visualize_tensor(
     Print a visual representation of the tensor.
 
     Args:
-        tensor: torch.Tensor of shape (20, 8, 8)
+        tensor: torch.Tensor of shape (22, 8, 8)
         channel: If specified, show only this channel. Otherwise show summary.
     """
     if isinstance(tensor, torch.Tensor):

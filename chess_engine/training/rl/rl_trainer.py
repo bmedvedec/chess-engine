@@ -77,7 +77,7 @@ class RLTrainer:
         # ---- build or attach model ----
         if model is None:
             self.model_config = HybridModelConfig(
-                cnn_input_channels=20,
+                cnn_input_channels=22,
                 cnn_filters=config.cnn_filters,
                 cnn_residual_blocks=config.cnn_blocks,
                 use_rnn=config.use_rnn,

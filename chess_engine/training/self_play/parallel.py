@@ -35,7 +35,7 @@ def _play_single_game_worker(
 
     # Load model
     model_config = HybridModelConfig(
-        cnn_input_channels=20,
+        cnn_input_channels=22,
         cnn_filters=config_dict["cnn_filters"],
         cnn_residual_blocks=config_dict["cnn_blocks"],
         cnn_dropout=config_dict.get("cnn_dropout", 0.0),

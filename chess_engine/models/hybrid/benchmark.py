@@ -21,7 +21,7 @@ def benchmark_inference(
     model.eval()
     device = model.device
 
-    board = torch.randn(batch_size, 20, 8, 8, device=device)
+    board = torch.randn(batch_size, 22, 8, 8, device=device)
     history = torch.randint(
         0, model.config.rnn_num_moves, (batch_size, seq_len), device=device
     )

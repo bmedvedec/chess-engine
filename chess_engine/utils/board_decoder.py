@@ -10,10 +10,16 @@ def tensor_to_board(self, tensor: Union[torch.Tensor, np.ndarray]) -> chess.Boar
     Useful for debugging and visualization.
 
     Args:
-        tensor: torch.Tensor of shape (20, 8, 8)
+        tensor: torch.Tensor of shape (22, 8, 8)
 
     Returns:
         chess.Board object
+
+    Note:
+        Channels 20 (2-fold repetition) and 21 (3-fold repetition) are not
+        reconstructed — they encode game history that cannot be recovered from
+        a single board tensor. The returned board will have is_repetition()
+        return False unless the caller rebuilds the move stack separately.
     """
     if isinstance(tensor, torch.Tensor):
         tensor = tensor.cpu().numpy()

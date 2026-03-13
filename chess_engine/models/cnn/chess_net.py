@@ -31,7 +31,7 @@ class ChessNet(nn.Module):
 
     def __init__(
         self,
-        input_channels: int = 20,
+        input_channels: int = 22,
         num_filters: int = 256,
         num_residual_blocks: int = 10,
         num_actions: int = 4672,
@@ -42,7 +42,7 @@ class ChessNet(nn.Module):
         Initialize complete chess network.
 
         Args:
-            input_channels: Number of input channels (default: 20)
+            input_channels: Number of input channels (default: 22)
             num_filters: Number of CNN filters (default: 256)
             num_residual_blocks: Number of residual blocks (default: 10)
             num_actions: Number of possible moves (default: 4672)
@@ -81,7 +81,7 @@ class ChessNet(nn.Module):
         Forward pass through complete network.
 
         Args:
-            x: Board tensor of shape (batch, 20, 8, 8)
+            x: Board tensor of shape (batch, 22, 8, 8)
 
         Returns:
             Tuple of (policy_logits, value):
@@ -107,7 +107,7 @@ class ChessNet(nn.Module):
         Prediction with softmax applied to policy (for inference).
 
         Args:
-            x: Board tensor of shape (batch, 20, 8, 8)
+            x: Board tensor of shape (batch, 22, 8, 8)
 
         Returns:
             Tuple of (policy_probs, value):

@@ -3,7 +3,7 @@ MOVE REPRESENTATION & ENCODING
 AlphaZero-style 4,672 move encoding
 
 This module handles conversion between chess.Move objects and numerical indices.
-Uses AlphaZero encoding scheme: from_square * 73 + move_type = 4,672 possible moves.
+We use the AlphaZero encoding scheme: from_square * 73 + move_type = 4,672 possible moves.
 
 Move types (73 total per square):
   0-55:  Queen-style moves — 8 directions × 7 distances

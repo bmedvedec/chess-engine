@@ -5,7 +5,7 @@ from typing import Any, Dict, Literal
 @dataclass(frozen=True)
 class HybridModelConfig:
     # ===== CNN =====
-    cnn_input_channels: int = 20
+    cnn_input_channels: int = 22
     cnn_filters: int = 256
     cnn_residual_blocks: int = 10
     cnn_dropout: float = 0.0

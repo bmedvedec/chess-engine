@@ -2,7 +2,7 @@
 CNN ARCHITECTURE - Backbone (Residual Tower)
 
 Implements the convolutional backbone with residual blocks inspired by AlphaZero.
-Transforms board encoding (20, 8, 8) into rich feature representation (256, 8, 8).
+Transforms board encoding (22, 8, 8) into rich feature representation (256, 8, 8).
 """
 
 import torch
@@ -102,11 +102,11 @@ class ChessCNN(nn.Module):
     """
     Main CNN backbone for processing chess board state.
 
-    Transforms board encoding (20, 8, 8) into rich feature representation (256, 8, 8)
+    Transforms board encoding (22, 8, 8) into rich feature representation (256, 8, 8)
     that captures spatial patterns, piece relationships, and tactical motifs.
 
     Architecture:
-    - Initial conv layer: Expands 20 input channels to 256 features
+    - Initial conv layer: Expands 22 input channels to 256 features
     - Residual tower: 10-20 residual blocks for deep learning
     - Output: 256 feature maps at 8×8 resolution
 
@@ -115,7 +115,7 @@ class ChessCNN(nn.Module):
 
     def __init__(
         self,
-        input_channels: int = 20,
+        input_channels: int = 22,
         num_filters: int = 256,
         num_residual_blocks: int = 10,
         dropout: float = 0.0,
@@ -124,7 +124,7 @@ class ChessCNN(nn.Module):
         Initialize CNN backbone.
 
         Args:
-            input_channels: Number of input channels (default: 20 for board encoding)
+            input_channels: Number of input channels (default: 22 for board encoding)
             num_filters: Number of convolutional filters throughout network (default: 256)
             num_residual_blocks: Number of residual blocks in tower (default: 10)
             dropout: Dropout probability for regularization (default: 0.0)
@@ -170,7 +170,7 @@ class ChessCNN(nn.Module):
         Forward pass through CNN backbone.
 
         Args:
-            x: Input tensor of shape (batch, 20, 8, 8)
+            x: Input tensor of shape (batch, 22, 8, 8)
 
         Returns:
             Feature tensor of shape (batch, 256, 8, 8)

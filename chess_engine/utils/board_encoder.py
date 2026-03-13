@@ -4,13 +4,15 @@ BOARD REPRESENTATION & DATA ENCODING
 This module handles conversion between chess.Board objects and tensor representations.
 The tensor format is designed for CNN input following AlphaZero's approach.
 
-Tensor Structure: (20, 8, 8)
+Tensor Structure: (22, 8, 8)
 - Channels 0-11: Piece positions (6 for own pieces, 6 for opponent)
 - Channel 12: Color to move
 - Channel 13: Total move count
 - Channels 14-17: Castling rights
 - Channel 18: En passant square
 - Channel 19: Halfmove clock (50-move rule)
+- Channel 20: 2-fold repetition indicator (binary)
+- Channel 21: 3-fold repetition indicator (binary)
 
 Row/Rank mapping: row 0 = rank 1, row 7 = rank 8
 Col/File mapping: col 0 = file 'a', col 7 = file 'h'
@@ -39,7 +41,7 @@ class BoardEncoder:
 
     def __init__(self):
         """Initialize the board encoder"""
-        self.num_channels = 20
+        self.num_channels = 22
         self.board_size = 8
 
     def board_to_tensor(self, board: chess.Board) -> torch.Tensor:
@@ -50,7 +52,7 @@ class BoardEncoder:
             board: chess.Board object to encode
 
         Returns:
-            torch.Tensor of shape (20, 8, 8)
+            torch.Tensor of shape (22, 8, 8)
         """
         # Initialize empty tensor
         tensor = np.zeros(
@@ -100,6 +102,16 @@ class BoardEncoder:
         # Channel 19: Halfmove clock (normalized by 100 for 50-move rule)
         tensor[19, :, :] = board.halfmove_clock / 100.0
 
+        # Channel 20: 2-fold repetition indicator (binary)
+        # True when the current position has occurred at least twice in the game.
+        # Requires a populated move stack; returns False for positions loaded from FEN only.
+        tensor[20, :, :] = float(board.is_repetition(2))
+
+        # Channel 21: 3-fold repetition indicator (binary)
+        # True when the current position has occurred at least three times (draw claimable).
+        # Requires a populated move stack; returns False for positions loaded from FEN only.
+        tensor[21, :, :] = float(board.is_repetition(3))
+
         return torch.from_numpy(tensor)
 
     def batch_boards_to_tensor(self, boards: List[chess.Board]) -> torch.Tensor:
@@ -110,7 +122,7 @@ class BoardEncoder:
             boards: List of chess.Board objects
 
         Returns:
-            torch.Tensor of shape (batch_size, 20, 8, 8)
+            torch.Tensor of shape (batch_size, 22, 8, 8)
         """
         tensors = [self.board_to_tensor(board) for board in boards]
         return torch.stack(tensors)

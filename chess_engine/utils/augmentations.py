@@ -2,8 +2,6 @@ import chess
 import torch
 from typing import List
 
-from chess_engine.utils.move_encoder import MoveEncoder
-
 
 class DataAugmentation:
     """
@@ -60,7 +58,7 @@ class DataAugmentation:
         More efficient than converting to board and back.
 
         Args:
-            tensor: torch.Tensor of shape (20, 8, 8) or (batch, 20, 8, 8)
+            tensor: torch.Tensor of shape (22, 8, 8) or (batch, 22, 8, 8)
 
         Returns:
             Horizontally flipped tensor
@@ -104,6 +102,8 @@ class DataAugmentation:
         Returns:
             Flipped move index with horizontally mirrored coordinates
         """
+        from chess_engine.utils.move_encoder import MoveEncoder
+
         encoder = MoveEncoder()
         move = encoder.decode_move(move_index)
         flipped = DataAugmentation.flip_move(move)
