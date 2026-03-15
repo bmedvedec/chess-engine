@@ -1,22 +1,57 @@
+import logging
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+logger = logging.getLogger(__name__)
 
 
 class FeatureFusion(nn.Module):
     """
     Combines CNN spatial features with RNN temporal context.
+
+    Gate logging (gated fusion only):
+        After each forward pass ``last_gate_mean`` holds the batch-mean gate
+        value (float in [0, 1]).  Interpretation:
+            ≈ 1.0  → output dominated by CNN (LSTM barely contributing)
+            ≈ 0.0  → output dominated by RNN projection (CNN barely used)
+            ≈ 0.5  → both branches contribute equally (healthy balance)
+        The trainer can read this attribute after each step and write it to
+        TensorBoard or a CSV for the ablation study.
     """
+
+    # Declare plain-Python attributes at class level so that Pyright/Pylance
+    # resolves their types directly instead of routing assignments through
+    # nn.Module.__setattr__ (which is typed as accepting only Tensor | Module).
+    fusion_type: str
+    output_size: int
+    log_gates: bool
+    last_gate_mean: Optional[float]
 
     def __init__(
         self,
         cnn_feature_size: int,
         rnn_context_size: int,
         fusion_type: str = "gated",
+        log_gates: bool = False,
     ):
+        """
+        Args:
+            cnn_feature_size: Channel count coming out of the CNN backbone.
+            rnn_context_size: Size of the RNN context vector.
+            fusion_type: One of "concat", "gated", or "attention".
+            log_gates: If True, emit gate statistics to the module logger at
+                DEBUG level on every forward pass (gated fusion only).
+        """
         super().__init__()
 
         self.fusion_type = fusion_type
+        self.log_gates = log_gates
+
+        # Populated after each gated forward pass; None otherwise.
+        self.last_gate_mean: Optional[float] = None
 
         if fusion_type == "concat":
             self.output_size = cnn_feature_size + rnn_context_size
@@ -62,6 +97,19 @@ class FeatureFusion(nn.Module):
         if self.fusion_type == "gated":
             pooled = F.adaptive_avg_pool2d(cnn_features, 1).flatten(1)
             gate = self.gate(torch.cat([pooled, rnn_context], dim=1))
+
+            # --- Gate logging (ablation study) ---
+            # gate shape: (batch, cnn_feature_size)
+            # Values near 1 → CNN dominates; near 0 → RNN dominates.
+            self.last_gate_mean = gate.mean().item()
+            if self.log_gates:
+                logger.debug(
+                    "fusion gate | mean=%.4f  min=%.4f  max=%.4f",
+                    self.last_gate_mean,
+                    gate.min().item(),
+                    gate.max().item(),
+                )
+
             gate = gate[:, :, None, None]
 
             rnn_proj = self.rnn_projection(rnn_context)

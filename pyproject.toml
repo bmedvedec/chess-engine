@@ -22,5 +22,6 @@ dependencies = [
     "flake8>=6.0.0",
 ]
 
-[tool.setuptools]
-packages = ["chess_engine"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["chess_engine*"]
