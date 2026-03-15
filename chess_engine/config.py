@@ -113,7 +113,30 @@ USE_AMP = HARDWARE_CONFIG["mixed_precision"]
 # =============================================================================
 
 MCTS_SIMULATIONS = 800
+
+# Exploration constant for PUCT formula: UCB = Q + c_puct * P * sqrt(N) / (1 + n)
+#
+# Value: 1.5  (conservative default — retune with a trained checkpoint)
+#
+# Sweep history:
+#   2026-03-15 — scripts/tune_cpuct.py ran values [1.5, 1.75, 2.0, 2.25, 2.5]
+#   against baseline=1.5, 25 games each, 20 sims/move.
+#   Result: INCONCLUSIVE — run used no --checkpoint (random weights).
+#   All 100 games ended in draws (50% score for every value).
+#   A random model produces near-random play; c_puct has no measurable effect
+#   until the policy/value heads are trained.
+#
+# Next step: re-run with --checkpoint after training reaches a useful level:
+#   python scripts/tune_cpuct.py --checkpoint path/to/model.pt --games 50
+#   Then update C_PUCT here with the winning value and record the result above.
+#
+# Rationale for keeping 1.5: no trained-model evidence yet to justify changing.
+# The Hybrid LSTM-augmented policy may benefit from a slightly higher value
+# (smoother priors → more exploration needed) but this must be validated.
+# C_PUCT_SWEEP lists the candidate values for the next tuning run.
 C_PUCT = 1.5
+C_PUCT_SWEEP = [1.5, 1.75, 2.0, 2.25, 2.5]
+
 TEMPERATURE = 1.0
 
 # =============================================================================
