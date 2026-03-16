@@ -35,6 +35,7 @@ from chess_engine.training.rl.train_step import execute_training_step
 from chess_engine.utils.board_encoder import BoardEncoder
 from chess_engine.utils.move_encoder import MoveEncoder
 from chess_engine.data.replay.buffer import ReplayBuffer
+from chess_engine.data.replay.prioritized import PrioritizedReplayBuffer
 
 
 class RLTrainer:
@@ -134,10 +135,22 @@ class RLTrainer:
         )
 
         # ---- replay buffer ----
-        self.replay_buffer = ReplayBuffer(
-            max_size=config.buffer_size,
-            memory_efficient=True,
-        )
+        if config.use_prioritized_replay:
+            self.replay_buffer: ReplayBuffer = PrioritizedReplayBuffer(
+                max_size=config.buffer_size,
+                alpha=config.per_alpha,
+                memory_efficient=True,
+            )
+            print(
+                f"📦 Replay buffer: Prioritized (α={config.per_alpha}, "
+                f"β {config.per_beta}→{config.per_beta_end})"
+            )
+        else:
+            self.replay_buffer = ReplayBuffer(
+                max_size=config.buffer_size,
+                memory_efficient=True,
+            )
+            print("📦 Replay buffer: Uniform")
 
         # ---- training state ----
         self.current_iteration = 0
@@ -286,23 +299,56 @@ class RLTrainer:
                     total_games_played=self.total_games_played,
                 )
 
+                # Compute linearly annealed PER beta for this iteration.
+                # β starts at per_beta and reaches per_beta_end by the final iteration,
+                # gradually reducing the IS-correction bias introduced by priority sampling.
+                if self.config.use_prioritized_replay:
+                    progress = iteration / max(1, self.config.num_iterations - 1)
+                    per_beta = (
+                        self.config.per_beta
+                        + (self.config.per_beta_end - self.config.per_beta) * progress
+                    )
+                else:
+                    per_beta = None
+
                 # Step 2: Training
                 if len(self.replay_buffer) >= self.config.min_buffer_size:
-                    train_metrics, self.total_training_steps = execute_training_step(
-                        model=self.model,
-                        replay_buffer=self.replay_buffer,
-                        optimizer=self.optimizer,
-                        config=self.config,
-                        board_encoder=self.board_encoder,
-                        move_encoder=self.move_encoder,
-                        device=self.device,
-                        use_amp=self.use_amp,
-                        scaler=self.scaler,
-                        value_criterion=self.value_criterion,
-                        writer=self.writer,
-                        current_iteration=self.current_iteration,
-                        total_training_steps=self.total_training_steps,
+                    train_metrics, self.total_training_steps, per_update = (
+                        execute_training_step(
+                            model=self.model,
+                            replay_buffer=self.replay_buffer,
+                            optimizer=self.optimizer,
+                            config=self.config,
+                            board_encoder=self.board_encoder,
+                            move_encoder=self.move_encoder,
+                            device=self.device,
+                            use_amp=self.use_amp,
+                            scaler=self.scaler,
+                            value_criterion=self.value_criterion,
+                            writer=self.writer,
+                            current_iteration=self.current_iteration,
+                            total_training_steps=self.total_training_steps,
+                            per_beta=per_beta,
+                        )
                     )
+
+                    # Push the freshly-computed priorities back into the buffer
+                    # so that surprising positions are sampled more in future steps.
+                    if per_update is not None and isinstance(
+                        self.replay_buffer, PrioritizedReplayBuffer
+                    ):
+                        self.replay_buffer.update_priorities(
+                            per_update["indices"], per_update["priorities"]
+                        )
+                        self.writer.add_scalar(
+                            "per/beta", per_beta, self.current_iteration
+                        )
+                        self.writer.add_scalar(
+                            "per/mean_priority",
+                            sum(per_update["priorities"])
+                            / len(per_update["priorities"]),
+                            self.current_iteration,
+                        )
                 else:
                     print(
                         f"\n⏳ Buffer size ({len(self.replay_buffer)}) below minimum "

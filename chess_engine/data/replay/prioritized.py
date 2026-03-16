@@ -68,6 +68,11 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         super().add_game_example(example)
         self.priorities.append(priority)
 
+    def clear(self) -> None:
+        """Clear all examples and their priorities."""
+        super().clear()
+        self.priorities.clear()
+
     def sample(self, batch_size: int, beta: float = 0.4) -> Dict[str, List]:
         """
         Sample batch using priorities.
@@ -82,9 +87,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         if len(self.buffer) < batch_size:
             batch_size = len(self.buffer)
 
-        # Compute sampling probabilities
+        # Guard: priorities and buffer must be the same length
+        assert len(self.priorities) == len(
+            self.buffer
+        ), f"Priority/buffer length mismatch: {len(self.priorities)} vs {len(self.buffer)}"
+
+        # Compute sampling probabilities (add epsilon to prevent division by zero)
         priorities = torch.tensor(list(self.priorities), dtype=torch.float32)
-        probs = priorities**self.alpha
+        probs = (priorities + 1e-8) ** self.alpha
         probs /= probs.sum()
 
         # Sample indices
