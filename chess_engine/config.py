@@ -85,6 +85,63 @@ HARDWARE_CONFIG = {
 }
 
 # =============================================================================
+# RESIDUAL BLOCK PRESETS (Experiment: 10 → 12–15 blocks)
+# =============================================================================
+#
+# Three named presets for the block-count sweep experiment.
+# Each preset holds the full set of architecture parameters that change with depth.
+# Use RESIDUAL_BLOCK_PRESET to select which preset is active.
+#
+# Experiment results (2026-03-16)
+# --------------------------------
+# Script : scripts/experiment_block_count.py
+# Config : 256 filters, 100 gradient steps, batch=64, 5 000 synthetic positions, CUDA
+#
+#   Preset      Blocks   Params    Steps/sec   Final loss   Loss drop   Policy loss
+#   ----------  ------   -------   ---------   ----------   ---------   -----------
+#   blocks_10     10     12.5 M      16.70        6.186        2.695       6.607
+#   blocks_12     12     14.8 M      15.59        6.251        2.640       6.593
+#   blocks_15     15     18.4 M      13.33        6.321        2.569       6.628
+#
+# Throughput cost: +2 blocks ≈ −7% steps/sec; 10 → 15 blocks ≈ −20% throughput.
+# Parameter cost:  10 → 15 blocks adds +47% parameters (+5.9 M).
+#
+# Convergence: blocks_10 reached the lowest final loss and the largest loss drop
+# in 100 steps — deeper models showed no convergence advantage on this data.
+# Policy and value losses across all three presets are within noise (<0.5% spread).
+#
+# Conclusion: no evidence of quality improvement from increasing block count.
+# Keep blocks_10 as default. The throughput cost is real; the quality gain is not.
+#
+# Caveat: the benchmark used random weights on synthetic positions (random policy
+# targets, random values). It measures optimization speed, not chess-playing
+# quality. A valid win-rate comparison requires real self-play training to
+# convergence followed by 50+ evaluation games. Re-run this experiment after
+# a full training run if compute budget allows.
+
+RESIDUAL_BLOCK_PRESETS = {
+    "blocks_10": {
+        "num_residual_blocks": 10,
+        "num_filters": 256,
+        # Baseline — best convergence per step, best throughput. Confirmed default.
+    },
+    "blocks_12": {
+        "num_residual_blocks": 12,
+        "num_filters": 256,
+        # −6.6% throughput vs blocks_10; no loss improvement measured.
+    },
+    "blocks_15": {
+        "num_residual_blocks": 15,
+        "num_filters": 256,
+        # −20.2% throughput vs blocks_10; no loss improvement measured.
+        # Upper limit for 8 GB VRAM with AMP and batch_size=256.
+    },
+}
+
+# Active preset — confirmed blocks_10 after 2026-03-16 sweep (see notes above).
+RESIDUAL_BLOCK_PRESET = "blocks_10"
+
+# =============================================================================
 # MODEL ARCHITECTURE
 # =============================================================================
 
