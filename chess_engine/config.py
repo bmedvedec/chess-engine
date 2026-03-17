@@ -175,7 +175,12 @@ MCTS_SIMULATIONS = 800
 
 # Exploration constant for PUCT formula: UCB = Q + c_puct * P * sqrt(N) / (1 + n)
 #
-# Value: 1.5  (conservative default — retune with a trained checkpoint)
+# AUTHORITATIVE SOURCE: chess_engine/training/rl/rl_config.py  (RLTrainingConfig.c_puct)
+# This constant is a read-only reference kept here for scripts (e.g. tune_cpuct.py)
+# that need a baseline default. The training loop, self-play, and evaluation all
+# read from rl_config.py. If you change the training value, update BOTH files.
+#
+# Value: 2.0  (matches rl_config.py; self_play/config.py DEFAULT_C_PUCT = 2.0)
 #
 # Sweep history:
 #   2026-03-15 — scripts/tune_cpuct.py ran values [1.5, 1.75, 2.0, 2.25, 2.5]
@@ -187,13 +192,8 @@ MCTS_SIMULATIONS = 800
 #
 # Next step: re-run with --checkpoint after training reaches a useful level:
 #   python scripts/tune_cpuct.py --checkpoint path/to/model.pt --games 50
-#   Then update C_PUCT here with the winning value and record the result above.
-#
-# Rationale for keeping 1.5: no trained-model evidence yet to justify changing.
-# The Hybrid LSTM-augmented policy may benefit from a slightly higher value
-# (smoother priors → more exploration needed) but this must be validated.
-# C_PUCT_SWEEP lists the candidate values for the next tuning run.
-C_PUCT = 1.5
+#   Then update c_puct in rl_config.py with the winning value (and mirror here).
+C_PUCT = 2.0
 C_PUCT_SWEEP = [1.5, 1.75, 2.0, 2.25, 2.5]
 
 TEMPERATURE = 1.0
