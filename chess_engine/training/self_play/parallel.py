@@ -99,6 +99,7 @@ class ParallelSelfPlay:
         model_path: str,
         config: Optional[SelfPlayConfig] = None,
         num_workers: Optional[int] = None,
+        model_config: Optional[dict] = None,
     ):
         """
         Initialize parallel worker.
@@ -107,10 +108,14 @@ class ParallelSelfPlay:
             model_path: Path to model checkpoint
             config: Self-play configuration
             num_workers: Number of parallel workers (default: CPU count - 1)
+            model_config: Model architecture fields (cnn_filters, cnn_blocks,
+                          num_actions, etc.) forwarded to each worker process
+                          so it can reconstruct HybridModelConfig.
         """
         self.model_path = model_path
         self.config = config or SelfPlayConfig()
         self.num_workers = num_workers or max(1, cpu_count() - 1)
+        self.model_config = model_config or {}
 
         print(f"Initialized parallel worker with {self.num_workers} processes")
 
@@ -140,7 +145,7 @@ class ParallelSelfPlay:
 
         start_time = time.time()
 
-        # Create config dictionary
+        # Create config dictionary (self-play params + model architecture params)
         config_dict = {
             "num_simulations": self.config.num_simulations,
             "c_puct": self.config.c_puct,
@@ -151,6 +156,9 @@ class ParallelSelfPlay:
             "late_game_temperature": self.config.late_game_temperature,
             "dirichlet_alpha": self.config.dirichlet_alpha,
             "resign_threshold": self.config.resign_threshold,
+            # Model architecture fields required by each worker process to
+            # reconstruct HybridModelConfig without access to the main process.
+            **self.model_config,
         }
 
         # Create arguments

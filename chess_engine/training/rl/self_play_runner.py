@@ -77,6 +77,16 @@ def execute_self_play_step(
             model_path=temp_model_path,
             config=selfplay_config,
             num_workers=config.num_workers,
+            model_config={
+                "cnn_filters": config.cnn_filters,
+                "cnn_blocks": config.cnn_blocks,
+                "num_actions": config.num_actions,
+                "rnn_hidden_size": config.rnn_hidden_size,
+                "rnn_layers": config.rnn_layers,
+                "rnn_use_attention": config.rnn_use_attention,
+                "rnn_bidirectional": config.rnn_bidirectional,
+                "fusion_type": config.fusion_type,
+            },
         )
         examples = worker.play_games_parallel(
             num_games=config.games_per_iteration,
