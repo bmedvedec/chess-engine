@@ -4,7 +4,7 @@ import torch
 from typing import Union
 
 
-def tensor_to_board(self, tensor: Union[torch.Tensor, np.ndarray]) -> chess.Board:
+def tensor_to_board(tensor: Union[torch.Tensor, np.ndarray]) -> chess.Board:
     """
     Reconstruct a chess.Board from a tensor representation.
     Useful for debugging and visualization.

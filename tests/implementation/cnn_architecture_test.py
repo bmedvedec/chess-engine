@@ -1,11 +1,11 @@
-from chess_engine.models.chess_cnn import (
-    ChessResidualBlock,
+from chess_engine.models.cnn.chess_net import (
     ChessCNN,
     PolicyHead,
     ValueHead,
     ChessNet,
     count_parameters,
 )
+from chess_engine.models.cnn.backbone import ChessResidualBlock
 import torch
 import torch.nn.functional as F
 
@@ -29,20 +29,20 @@ def test_architecture():
     print(f"   Output shape: {output.shape}")
     print(f"   Parameters: {count_parameters(residual_block):,}")
     assert output.shape == test_input.shape, "Shape mismatch!"
-    print("   ✓ Residual block working correctly")
+    print("   [OK] Residual block working correctly")
 
     # Test 2: CNN Backbone
     print("\n2. Testing CNN Backbone...")
-    backbone = ChessCNN(input_channels=20, num_filters=256, num_residual_blocks=10).to(
+    backbone = ChessCNN(input_channels=22, num_filters=256, num_residual_blocks=10).to(
         device
     )
-    board_input = torch.randn(4, 20, 8, 8, device=device)
+    board_input = torch.randn(4, 22, 8, 8, device=device)
     features = backbone(board_input)
     print(f"   Input shape:  {board_input.shape}")
     print(f"   Output shape: {features.shape}")
     print(f"   Parameters: {count_parameters(backbone):,}")
     assert features.shape == (4, 256, 8, 8), "Shape mismatch!"
-    print("   ✓ CNN backbone working correctly")
+    print("   [OK] CNN backbone working correctly")
 
     # Test 3: Policy Head
     print("\n3. Testing Policy Head...")
@@ -52,7 +52,7 @@ def test_architecture():
     print(f"   Output shape: {policy_logits.shape}")
     print(f"   Parameters: {count_parameters(policy_head):,}")
     assert policy_logits.shape == (4, 4096), "Shape mismatch!"
-    print("   ✓ Policy head working correctly")
+    print("   [OK] Policy head working correctly")
 
     # Test 4: Value Head
     print("\n4. Testing Value Head...")
@@ -64,12 +64,12 @@ def test_architecture():
     print(f"   Parameters: {count_parameters(value_head):,}")
     assert value.shape == (4, 1), "Shape mismatch!"
     assert value.min() >= -1.0 and value.max() <= 1.0, "Value out of range!"
-    print("   ✓ Value head working correctly")
+    print("   [OK] Value head working correctly")
 
     # Test 5: Complete Network
     print("\n5. Testing Complete Network...")
     model = ChessNet(
-        input_channels=20,
+        input_channels=22,
         num_filters=256,
         num_residual_blocks=10,
         num_actions=4096,
@@ -80,7 +80,7 @@ def test_architecture():
     print(f"   Policy shape: {policy_logits.shape}")
     print(f"   Value shape:  {value.shape}")
     print(f"   Total parameters: {count_parameters(model):,}")
-    print("   ✓ Complete network working correctly")
+    print("   [OK] Complete network working correctly")
 
     # Test 6: Prediction mode
     print("\n6. Testing Prediction Mode...")
@@ -88,7 +88,7 @@ def test_architecture():
     print(f"   Policy probabilities shape: {policy_probs.shape}")
     print(f"   Policy sum: {policy_probs.sum(dim=1)}")  # Should be ~1.0 for each batch
     print(f"   Value shape: {value.shape}")
-    print("   ✓ Prediction mode working correctly")
+    print("   [OK] Prediction mode working correctly")
 
     # Test 7: Gradient flow
     print("\n7. Testing Gradient Flow...")
@@ -114,7 +114,7 @@ def test_architecture():
     )
     print(f"   Loss: {loss.item():.4f}")
     print(f"   Gradients computed: {has_gradients}")
-    print("   ✓ Gradient flow working correctly")
+    print("   [OK] Gradient flow working correctly")
 
     # Test 8: Save/Load functionality
     print("\n8. Testing Save/Load...")
@@ -139,7 +139,7 @@ def test_architecture():
             assert torch.allclose(p1, p2, atol=1e-6), "Policy mismatch after load!"
             assert torch.allclose(v1, v2, atol=1e-6), "Value mismatch after load!"
 
-        print("   ✓ Save/Load working correctly")
+        print("   [OK] Save/Load working correctly")
     finally:
         # Cleanup - works on both Windows and Unix
         if os.path.exists(tmp_path):
@@ -149,7 +149,7 @@ def test_architecture():
                 pass  # Windows might still have it locked
 
     print("\n" + "=" * 80)
-    print("✅ ALL ARCHITECTURE TESTS PASSED!")
+    print("[OK] ALL ARCHITECTURE TESTS PASSED!")
     print("=" * 80)
 
     # Print model summary

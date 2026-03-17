@@ -1,4 +1,7 @@
-from chess_engine.utils.board_encoder import BoardEncoder, DataAugmentation
+from chess_engine.utils.board_encoder import BoardEncoder
+from chess_engine.utils.board_decoder import tensor_to_board
+from chess_engine.utils.augmentations import DataAugmentation
+from chess_engine.utils.visualization import visualize_tensor
 import chess
 
 
@@ -20,10 +23,10 @@ def test_encoding():
     print(f"Tensor dtype: {tensor.dtype}")
 
     # Visualize some channels
-    encoder.visualize_tensor(tensor)
+    visualize_tensor(tensor)
 
     # Test reconstruction
-    reconstructed = encoder.tensor_to_board(tensor)
+    reconstructed = tensor_to_board(tensor)
     print(f"\nReconstructed board:\n{reconstructed}\n")
     print(f"FEN match: {board.fen() == reconstructed.fen()}")
 
@@ -35,7 +38,7 @@ def test_encoding():
     print(f"Board after 1.e4 e5 2.Nf3:\n{board}\n")
 
     tensor = encoder.board_to_tensor(board)
-    reconstructed = encoder.tensor_to_board(tensor)
+    reconstructed = tensor_to_board(tensor)
     print(
         f"Reconstruction successful: {board.board_fen() == reconstructed.board_fen()}"
     )
@@ -74,10 +77,10 @@ def test_encoding():
         chess.Move.from_uci("b1c3"),  # Knight move
     ]
 
-    print("\nOriginal moves → Flipped moves:")
+    print("\nOriginal moves -> Flipped moves:")
     for move in test_moves:
         flipped_move = DataAugmentation.flip_move(move)
-        print(f"  {move.uci():6s} → {flipped_move.uci()}")
+        print(f"  {move.uci():6s} -> {flipped_move.uci()}")
 
         # Verify the flip is correct
         from_file_orig = chess.square_file(move.from_square)
@@ -98,42 +101,46 @@ def test_encoding():
         assert from_rank_flip == from_rank_orig, f"From rank changed unexpectedly"
         assert to_rank_flip == to_rank_orig, f"To rank changed unexpectedly"
 
-    print("✅ All move flips verified correct!")
+    print("[OK] All move flips verified correct!")
 
-    # Test 6: Move index flipping
+    # Test 6: Move index flipping (4672 AlphaZero encoding)
     print("\n6. Testing move index flipping (NEW)...")
 
-    # Test move index flipping (encoding: from_square * 64 + to_square)
-    test_indices = [
-        (0, "a1a1"),  # Corner square to itself
-        (63, "a1h1"),  # Bottom left to bottom right
-        (4032, "h8a8"),  # Top right to top left
-        (4095, "h8h8"),  # Corner square to itself
-        (260, "e2e4"),  # Common pawn move
+    from chess_engine.utils.move_encoder import MoveEncoder as _MoveEnc
+
+    _enc = _MoveEnc()
+
+    # Use valid 4672-encoded moves (updated from old 4096 raw indices)
+    test_moves_6 = [
+        chess.Move.from_uci("e2e4"),  # Common pawn move
+        chess.Move.from_uci("a2a4"),  # a-file pawn (should flip to h-file)
+        chess.Move.from_uci("h2h4"),  # h-file pawn (should flip to a-file)
+        chess.Move.from_uci("g1f3"),  # Knight move
+        chess.Move.from_uci("b1c3"),  # Knight move
     ]
 
-    print("\nOriginal index → Flipped index:")
-    for move_index, description in test_indices:
+    print("\nOriginal index -> Flipped index:")
+    for move in test_moves_6:
+        move_index = _enc.encode_move(move)
         flipped_index = DataAugmentation.flip_move_index(move_index)
+        flipped_move = _enc.decode_move(flipped_index)
 
-        # Decode to verify
-        from_sq = move_index // 64
-        to_sq = move_index % 64
-        from_sq_flip = flipped_index // 64
-        to_sq_flip = flipped_index % 64
-
-        print(f"  {move_index:4d} ({description}) → {flipped_index:4d}")
+        print(
+            f"  {move.uci():6s} (idx {move_index:4d}) -> {flipped_move.uci():6s} (idx {flipped_index:4d})"
+        )
 
         # Verify files are flipped
-        from_file = from_sq % 8
-        to_file = to_sq % 8
-        from_file_flip = from_sq_flip % 8
-        to_file_flip = to_sq_flip % 8
+        from_file_orig = chess.square_file(move.from_square)
+        to_file_orig = chess.square_file(move.to_square)
+        from_file_flip = chess.square_file(flipped_move.from_square)
+        to_file_flip = chess.square_file(flipped_move.to_square)
 
-        assert from_file_flip == 7 - from_file, f"From file not flipped"
-        assert to_file_flip == 7 - to_file, f"To file not flipped"
+        assert (
+            from_file_flip == 7 - from_file_orig
+        ), f"From file not flipped for {move.uci()}"
+        assert to_file_flip == 7 - to_file_orig, f"To file not flipped for {move.uci()}"
 
-    print("✅ All move index flips verified correct!")
+    print("[OK] All move index flips verified correct!")
 
     # Test 7: Consistency between move and move_index flipping
     print("\n7. Testing consistency between flip_move and flip_move_index...")
@@ -167,7 +174,7 @@ def test_encoding():
             flipped_index_method1 == flipped_index_method2
         ), f"Inconsistent flipping for {move.uci()}"
 
-    print("✅ flip_move and flip_move_index are consistent!")
+    print("[OK] flip_move and flip_move_index are consistent!")
 
     # Test 8: Round-trip test (flip twice = original)
     print("\n8. Testing round-trip (flip twice = original)...")
@@ -185,7 +192,7 @@ def test_encoding():
         flipped_twice = DataAugmentation.flip_move(flipped_once)
 
         assert move == flipped_twice, f"Round-trip failed for {move.uci()}"
-        print(f"  {move.uci()} → {flipped_once.uci()} → {flipped_twice.uci()} ✅")
+        print(f"  {move.uci()} -> {flipped_once.uci()} -> {flipped_twice.uci()} [OK]")
 
     # Same for move indices
     for move in test_moves:
@@ -197,7 +204,7 @@ def test_encoding():
             original_index == flipped_twice
         ), f"Round-trip failed for index {original_index}"
 
-    print("✅ Round-trip test passed!")
+    print("[OK] Round-trip test passed!")
 
     # Test 9: Promotion moves
     print("\n9. Testing promotion move flipping...")
@@ -214,10 +221,10 @@ def test_encoding():
     assert (
         promotion_move.promotion == flipped_promotion.promotion
     ), "Promotion piece not preserved"
-    print("✅ Promotion moves handled correctly!")
+    print("[OK] Promotion moves handled correctly!")
 
     print("\n" + "=" * 80)
-    print("✅ ALL ENCODING TESTS PASSED!")
+    print("[OK] ALL ENCODING TESTS PASSED!")
     print("=" * 80)
 
 

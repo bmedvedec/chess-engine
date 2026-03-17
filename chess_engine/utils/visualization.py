@@ -4,7 +4,7 @@ from typing import Optional, Union
 
 
 def visualize_tensor(
-    self, tensor: Union[torch.Tensor, np.ndarray], channel: Optional[int] = None
+    tensor: Union[torch.Tensor, np.ndarray], channel: Optional[int] = None
 ):
     """
     Print a visual representation of the tensor.
@@ -54,6 +54,8 @@ def visualize_tensor(
             "Black Q-Castle",
             "En Passant",
             "Halfmove Clock",
+            "2-fold Repetition",
+            "3-fold Repetition",
         ]
 
         for ch, name in enumerate(channel_names):

@@ -145,7 +145,9 @@ RESIDUAL_BLOCK_PRESET = "blocks_10"
 # MODEL ARCHITECTURE
 # =============================================================================
 
-BOARD_CHANNELS = 20  # Input channels for CNN
+BOARD_CHANNELS = (
+    22  # Input channels for CNN (20 piece/meta planes + 2 repetition planes added in)
+)
 CNN_FILTERS = HARDWARE_CONFIG["num_filters"]  # Number of filters in CNN
 CNN_BLOCKS = HARDWARE_CONFIG["num_residual_blocks"]  # Number of residual blocks
 MOVE_EMBEDDING_DIM = 64
