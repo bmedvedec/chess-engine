@@ -167,7 +167,7 @@ def test_replay_buffer() -> None:
     print(f"   Both store same number, but memory-efficient uses less RAM")
 
     print("\n" + "=" * 80)
-    print("✅ ALL REPLAY BUFFER TESTS PASSED!")
+    print("[OK] ALL REPLAY BUFFER TESTS PASSED!")
     print("=" * 80)
 
 
@@ -210,7 +210,7 @@ def test_per_correctness() -> None:
     buf.clear()
     assert len(buf) == 0, "Buffer should be empty after clear()"
     assert len(buf.priorities) == 0, "Priorities should be empty after clear()"
-    print("   ✅ clear() resets both buffer and priorities")
+    print("   [OK] clear() resets both buffer and priorities")
 
     # ------------------------------------------------------------------
     # B. Zero-priority items don't cause NaN / division-by-zero
@@ -226,7 +226,7 @@ def test_per_correctness() -> None:
         assert all(
             w == weights[0] for w in weights
         ), "All-zero priorities should produce uniform weights"
-        print("   ✅ Zero priorities handled without NaN/crash")
+        print("   [OK] Zero priorities handled without NaN/crash")
     except Exception as e:
         raise AssertionError(f"Zero-priority sampling raised unexpected error: {e}")
 
@@ -246,7 +246,7 @@ def test_per_correctness() -> None:
         assert (
             "mismatch" in str(e).lower() or "priority" in str(e).lower()
         ), f"Unexpected assertion message: {e}"
-    print("   ✅ Desync detected and raised AssertionError")
+    print("   [OK] Desync detected and raised AssertionError")
 
     # ------------------------------------------------------------------
     # D. High-priority items are sampled proportionally more often
@@ -274,7 +274,7 @@ def test_per_correctness() -> None:
         f"(expected >70%)"
     )
     print(
-        f"   ✅ High-priority item sampled {counts[0]}/{N_DRAWS} "
+        f"   [OK] High-priority item sampled {counts[0]}/{N_DRAWS} "
         f"({counts[0]/N_DRAWS:.0%}) times"
     )
 
@@ -295,7 +295,7 @@ def test_per_correctness() -> None:
         assert (
             abs(max(weights) - 1.0) < 1e-5
         ), f"Max IS weight not 1.0 for beta={beta}: {max(weights)}"
-    print("   ✅ IS weights in (0,1] and max=1.0 for β ∈ {0.0, 0.4, 1.0}")
+    print("   [OK] IS weights in (0,1] and max=1.0 for beta in {0.0, 0.4, 1.0}")
 
     # ------------------------------------------------------------------
     # F. update_priorities() shifts the sampling distribution
@@ -320,7 +320,7 @@ def test_per_correctness() -> None:
         f"After priority boost, item 0 sampled only "
         f"{counts_after[0]}/200 times (expected >100)"
     )
-    print(f"   ✅ After priority boost, item 0 sampled {counts_after[0]}/200 times")
+    print(f"   [OK] After priority boost, item 0 sampled {counts_after[0]}/200 times")
 
     # ------------------------------------------------------------------
     # G. Save/load round-trip preserves priority values
@@ -347,7 +347,7 @@ def test_per_correctness() -> None:
             abs(orig - loaded) < 1e-6
         ), f"Priority mismatch after load: {orig} vs {loaded}"
     print(
-        f"   ✅ All {len(expected_priorities)} priorities preserved through save/load"
+        f"   [OK] All {len(expected_priorities)} priorities preserved through save/load"
     )
 
     # ------------------------------------------------------------------
@@ -367,12 +367,12 @@ def test_per_correctness() -> None:
     batch = buf.sample(batch_size=10, beta=0.4)
     assert len(batch["boards"]) == 10
     print(
-        f"   ✅ After overflow: len(buffer)={len(buf)}, "
+        f"   [OK] After overflow: len(buffer)={len(buf)}, "
         f"len(priorities)={len(buf.priorities)} — in sync"
     )
 
     print("\n" + "=" * 80)
-    print("✅ ALL PER CORRECTNESS TESTS PASSED!")
+    print("[OK] ALL PER CORRECTNESS TESTS PASSED!")
     print("=" * 80)
 
 

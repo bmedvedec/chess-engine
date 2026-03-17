@@ -113,7 +113,7 @@ class RLTrainingConfig:
     # Recommendation: enable PER (use_prioritized_replay=True) for production runs.
     # The per_alpha / per_beta defaults below match the original PER paper and work
     # well for chess self-play without further tuning.
-    use_prioritized_replay: bool = False
+    use_prioritized_replay: bool = True
 
     # Priority exponent alpha: controls how strongly priorities skew sampling.
     #   alpha=0 -> uniform sampling (equivalent to standard replay)
