@@ -36,6 +36,7 @@ from chess_engine.utils.board_encoder import BoardEncoder
 from chess_engine.utils.move_encoder import MoveEncoder
 from chess_engine.data.replay.buffer import ReplayBuffer
 from chess_engine.data.replay.prioritized import PrioritizedReplayBuffer
+from chess_engine.training.rl.iteration_logger import IterationLogger
 
 
 class RLTrainer:
@@ -177,6 +178,10 @@ class RLTrainer:
         os.makedirs(config.log_dir, exist_ok=True)
         os.makedirs(config.checkpoint_dir, exist_ok=True)
         self.writer = SummaryWriter(log_dir=config.log_dir)
+        self.iter_logger = IterationLogger(
+            checkpoint_dir=config.checkpoint_dir,
+            config_dict=config.to_dict(),
+        )
 
         # ---- resume training ----
         if resume_from:
@@ -249,7 +254,7 @@ class RLTrainer:
         if message:
             print(f"\n💾 {message}")
         print(f"   Saved to: {best_path}")
-        print(f"   Iteration: {self.current_iteration}")
+        print(f"   Iteration: {self.best_iteration + 1}")
         print(f"   Win rate: {self.best_win_rate:.1%}")
 
     def train(self):
@@ -287,16 +292,19 @@ class RLTrainer:
                 iteration_start = time.time()
 
                 print(f"\n{'='*80}")
-                print(f"ITERATION {iteration}/{self.config.num_iterations}")
+                print(f"ITERATION {iteration + 1}/{self.config.num_iterations}")
                 print(f"{'='*80}")
 
                 # Step 1: Self-play
-                _, self.total_games_played = execute_self_play_step(
-                    model=self.model,
-                    config=self.config,
-                    replay_buffer=self.replay_buffer,
-                    device=self.device,
-                    total_games_played=self.total_games_played,
+                selfplay_start = time.time()
+                _, self.total_games_played, selfplay_stats, selfplay_seconds = (
+                    execute_self_play_step(
+                        model=self.model,
+                        config=self.config,
+                        replay_buffer=self.replay_buffer,
+                        device=self.device,
+                        total_games_played=self.total_games_played,
+                    )
                 )
 
                 # Compute linearly annealed PER beta for this iteration.
@@ -312,6 +320,7 @@ class RLTrainer:
                     per_beta = None
 
                 # Step 2: Training
+                train_start = time.time()
                 if len(self.replay_buffer) >= self.config.min_buffer_size:
                     train_metrics, self.total_training_steps, per_update = (
                         execute_training_step(
@@ -355,6 +364,7 @@ class RLTrainer:
                         f"({self.config.min_buffer_size}). Skipping training."
                     )
                     train_metrics = {"loss": 0.0, "policy_loss": 0.0, "value_loss": 0.0}
+                train_seconds = time.time() - train_start
 
                 # Step 3: Evaluation
                 eval_metrics = None
@@ -384,7 +394,21 @@ class RLTrainer:
                         )
 
                 # Step 4: Update history and log
+                iteration_seconds = time.time() - iteration_start
                 self._update_history(train_metrics, eval_metrics)
+                self.iter_logger.log(
+                    iteration=self.current_iteration,
+                    train_metrics=train_metrics,
+                    selfplay_stats=selfplay_stats,
+                    eval_metrics=eval_metrics,
+                    buffer_size=len(self.replay_buffer),
+                    games_played=self.total_games_played,
+                    training_steps=self.total_training_steps,
+                    learning_rate=self.optimizer.param_groups[0]["lr"],
+                    selfplay_seconds=selfplay_seconds,
+                    train_seconds=train_seconds,
+                    iteration_seconds=iteration_seconds,
+                )
 
                 # Step 5: Save checkpoint
                 if (iteration + 1) % self.config.save_frequency == 0:
@@ -485,9 +509,12 @@ class RLTrainer:
         )
         torch.save(checkpoint, checkpoint_path)
 
-        # Save latest
-        latest_path = os.path.join(self.config.checkpoint_dir, "latest.pt")
-        torch.save(checkpoint, latest_path)
+        # Only update latest.pt for clean per-iteration saves, not for
+        # interrupt/error recovery files, so latest.pt always points to
+        # the last successfully completed iteration.
+        if name.startswith("iteration_"):
+            latest_path = os.path.join(self.config.checkpoint_dir, "latest.pt")
+            torch.save(checkpoint, latest_path)
 
         # Save replay buffer
         buffer_path = os.path.join(self.config.checkpoint_dir, f"buffer_{name}.pkl")
@@ -540,10 +567,9 @@ class RLTrainer:
         # Restore training state
         self.current_iteration = checkpoint["iteration"]
 
-        # Log resume information
-        next_iteration = self.current_iteration + 1
-        print(f"   Resuming from iteration {self.current_iteration}")
-        print(f"   Next iteration will be: {next_iteration}")
+        # Log resume information (display as 1-based)
+        print(f"   Resuming from iteration {self.current_iteration + 1}")
+        print(f"   Next iteration will be: {self.current_iteration + 2}")
         self.total_games_played = checkpoint.get("total_games_played", 0)
         self.total_training_steps = checkpoint.get("total_training_steps", 0)
         self.best_iteration = checkpoint.get("best_iteration", 0)
@@ -558,7 +584,7 @@ class RLTrainer:
             self.replay_buffer.load(buffer_path)
             print(f"   Loaded replay buffer: {len(self.replay_buffer)} examples")
 
-        print(f"✅ Resumed from iteration {self.current_iteration}")
+        print(f"✅ Resumed from iteration {self.current_iteration + 1}")
 
     def _print_iteration_summary(
         self,

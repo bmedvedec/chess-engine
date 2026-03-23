@@ -73,7 +73,7 @@ def main():
         worker = ParallelSelfPlay(
             model_path=args.model, config=config, num_workers=args.workers
         )
-        examples = worker.play_games_parallel(
+        examples, _ = worker.play_games_parallel(
             num_games=args.games,
             buffer=buffer,
             save_path=args.output if not buffer else None,
@@ -92,7 +92,7 @@ def main():
         model.eval()
 
         worker = SelfPlayGameRunner(model=model, device=device, config=config)
-        examples = worker.play_games(
+        examples, _ = worker.play_games(
             num_games=args.games,
             buffer=buffer,
             save_path=args.output if not buffer else None,

@@ -36,7 +36,9 @@ def execute_self_play_step(
         total_games_played: Running count of total games played
 
     Returns:
-        Tuple of (examples, updated_total_games_played)
+        Tuple of (examples, updated_total_games_played, stats, selfplay_seconds)
+        where stats is a SelfPlayStatistics object and selfplay_seconds is the
+        wall-clock time for this self-play phase.
     """
     print(f"\n🎮 Self-Play: Generating {config.games_per_iteration} games...")
 
@@ -88,7 +90,7 @@ def execute_self_play_step(
                 "fusion_type": config.fusion_type,
             },
         )
-        examples = worker.play_games_parallel(
+        examples, stats = worker.play_games_parallel(
             num_games=config.games_per_iteration,
             buffer=replay_buffer,
         )
@@ -99,7 +101,7 @@ def execute_self_play_step(
             device=device,
             config=selfplay_config,
         )
-        examples = worker.play_games(
+        examples, stats = worker.play_games(
             num_games=config.games_per_iteration,
             buffer=replay_buffer,
         )
@@ -114,4 +116,4 @@ def execute_self_play_step(
     print(f"   Buffer size: {len(replay_buffer)}/{config.buffer_size}")
     print(f"   Total games played: {total_games_played}")
 
-    return examples, total_games_played
+    return examples, total_games_played, stats, elapsed

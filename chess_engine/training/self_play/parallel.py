@@ -124,7 +124,7 @@ class ParallelSelfPlay:
         num_games: int,
         buffer: Optional[ReplayBuffer] = None,
         save_path: Optional[str] = None,
-    ) -> List[GameExample]:
+    ) -> Tuple[List[GameExample], SelfPlayStatistics]:
         """
         Play multiple games in parallel.
 
@@ -134,7 +134,7 @@ class ParallelSelfPlay:
             save_path: Optional path to save examples (if no buffer)
 
         Returns:
-            List of all training examples
+            Tuple of (list of training examples, self-play statistics)
         """
         all_examples = []
         stats = SelfPlayStatistics()
@@ -212,7 +212,7 @@ class ParallelSelfPlay:
         if save_path and buffer is None:
             self._save_examples(all_examples, save_path)
 
-        return all_examples
+        return all_examples, stats
 
     def _save_examples(self, examples: List[GameExample], filepath: str):
         """Save examples to disk."""

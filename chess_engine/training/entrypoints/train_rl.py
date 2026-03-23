@@ -41,10 +41,13 @@ def main():
         help="MCTS exploration constant (default: 2.0)",
     )
     parser.add_argument(
-        "--parallel", action="store_true", help="Use parallel self-play"
+        "--parallel",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use parallel self-play (default: True). Pass --no-parallel to force sequential.",
     )
     parser.add_argument(
-        "--workers", type=int, default=None, help="Number of parallel workers"
+        "--workers", type=int, default=12, help="Number of parallel workers"
     )
 
     # Model parameters
@@ -60,7 +63,7 @@ def main():
 
     # Evaluation
     parser.add_argument("--eval-freq", type=int, default=5, help="Evaluation frequency")
-    parser.add_argument("--eval-games", type=int, default=20, help="Evaluation games")
+    parser.add_argument("--eval-games", type=int, default=50, help="Evaluation games (default: 50 — minimum for statistical significance)")
 
     parser.add_argument(
         "--temperature",
