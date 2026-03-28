@@ -76,7 +76,7 @@ class RLTrainingConfig:
     learning_rate: float = 0.001
     weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
-    value_loss_weight: float = 1.0
+    value_loss_weight: float = 2.0
 
     # =====================
     # Optimizer settings

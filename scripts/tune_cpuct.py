@@ -41,8 +41,10 @@ import chess
 import torch
 
 from chess_engine.config import C_PUCT, C_PUCT_SWEEP
+from chess_engine.models.cnn.chess_net import ChessNet
 from chess_engine.models.hybrid.config import HybridModelConfig
 from chess_engine.models.hybrid.hybrid_net import HybridChessNet
+import torch.nn as nn
 from chess_engine.search.mcts.search import MCTS
 from chess_engine.utils.board_encoder import BoardEncoder
 from chess_engine.utils.move_encoder import MoveEncoder
@@ -53,37 +55,64 @@ from chess_engine.utils.move_encoder import MoveEncoder
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def build_model(checkpoint: Optional[str], device: torch.device) -> HybridChessNet:
+def build_model(checkpoint: Optional[str], device: torch.device) -> nn.Module:
     """
-    Load a Hybrid model from checkpoint, or create a randomly-initialised one.
+    Load a model from checkpoint, inferring architecture (CNN vs Hybrid) from
+    the saved model_config.  Falls back to CNN-only when use_rnn is absent or False.
     For real c_puct tuning always provide --checkpoint; a random model produces
     near-random play and the sweep results are meaningless.
     """
-    cfg = HybridModelConfig(
-        cnn_input_channels=22,
-        cnn_filters=256,
-        cnn_residual_blocks=10,
-        use_rnn=True,
-        rnn_hidden_size=256,
-        rnn_num_layers=2,
-        fusion_type="gated",
-    )
-    model = HybridChessNet(cfg).to(device)
-
     if checkpoint:
-        state = torch.load(checkpoint, map_location=device)
-        # Support both raw state_dict and wrapped checkpoint dicts
-        if isinstance(state, dict) and "model_state_dict" in state:
-            state = state["model_state_dict"]
-        elif isinstance(state, dict) and "state_dict" in state:
-            state = state["state_dict"]
+        raw = torch.load(checkpoint, map_location=device)
+
+        # Resolve state dict
+        if isinstance(raw, dict) and "model_state_dict" in raw:
+            state = raw["model_state_dict"]
+        elif isinstance(raw, dict) and "state_dict" in raw:
+            state = raw["state_dict"]
+        else:
+            state = raw
+
+        # Detect architecture from saved metadata
+        model_cfg = raw.get("model_config", {}) if isinstance(raw, dict) else {}
+        use_rnn = model_cfg.get("use_rnn", False)
+        cnn_blocks = model_cfg.get("cnn_residual_blocks", 10)
+
+        if use_rnn:
+            cfg = HybridModelConfig(
+                cnn_input_channels=22,
+                cnn_filters=256,
+                cnn_residual_blocks=cnn_blocks,
+                use_rnn=True,
+                rnn_hidden_size=256,
+                rnn_num_layers=2,
+                fusion_type="gated",
+            )
+            model = HybridChessNet(cfg).to(device)
+        else:
+            model = ChessNet(
+                input_channels=22,
+                num_filters=256,
+                num_residual_blocks=cnn_blocks,
+            ).to(device)
+
+        # Remap keys if checkpoint was saved from the RL trainer's internal model
+        # (uses "cnn." prefix) but ChessNet expects "backbone." prefix.
+        if not use_rnn and any(k.startswith("cnn.") for k in state):
+            state = {
+                k.replace("cnn.", "backbone.", 1) if k.startswith("cnn.") else k: v
+                for k, v in state.items()
+            }
+
         model.load_state_dict(state)
-        print(f"  Loaded checkpoint: {checkpoint}")
+        arch = "Hybrid (CNN+RNN)" if use_rnn else "CNN-only"
+        print(f"  Loaded checkpoint: {checkpoint}  [{arch}, {cnn_blocks} blocks]")
     else:
         print("  ⚠  No checkpoint provided — using random weights.")
         print(
             "     Results will be ~50% for all c_puct values (not useful for tuning)."
         )
+        model = ChessNet(input_channels=22, num_filters=256, num_residual_blocks=10).to(device)
 
     model.eval()
     return model
@@ -95,7 +124,7 @@ def build_model(checkpoint: Optional[str], device: torch.device) -> HybridChessN
 
 
 def play_game(
-    model: HybridChessNet,
+    model: nn.Module,
     board_encoder: BoardEncoder,
     move_encoder: MoveEncoder,
     device: torch.device,
@@ -104,6 +133,7 @@ def play_game(
     challenger_plays_white: bool,
     num_simulations: int,
     max_moves: int,
+    use_rnn: bool = False,
 ) -> str:
     """
     Play one game between Challenger (sweep c_puct) and Baseline (fixed c_puct).
@@ -120,7 +150,7 @@ def play_game(
         device=device,
         num_simulations=num_simulations,
         c_puct=challenger_c_puct,
-        use_rnn=True,
+        use_rnn=use_rnn,
         temperature=0.1,  # Near-deterministic evaluation play
     )
     baseline_mcts = MCTS(
@@ -130,7 +160,7 @@ def play_game(
         device=device,
         num_simulations=num_simulations,
         c_puct=baseline_c_puct,
-        use_rnn=True,
+        use_rnn=use_rnn,
         temperature=0.1,
     )
 
@@ -184,13 +214,14 @@ class ValueResult:
 def evaluate_c_puct(
     c_puct_value: float,
     baseline: float,
-    model: HybridChessNet,
+    model: nn.Module,
     board_encoder: BoardEncoder,
     move_encoder: MoveEncoder,
     device: torch.device,
     num_games: int,
     num_simulations: int,
     max_moves: int,
+    use_rnn: bool = False,
 ) -> tuple[ValueResult, List[GameRecord]]:
     """Play num_games games and return the result + per-game log."""
     cw = bw = dr = 0
@@ -211,6 +242,7 @@ def evaluate_c_puct(
             challenger_plays_white=challenger_white,
             num_simulations=num_simulations,
             max_moves=max_moves,
+            use_rnn=use_rnn,
         )
         elapsed = round(time.perf_counter() - t0, 1)
 
@@ -376,6 +408,7 @@ def main() -> None:
             num_games=args.games,
             num_simulations=args.simulations,
             max_moves=args.max_moves,
+            use_rnn=isinstance(model, HybridChessNet),
         )
         all_results.append(result)
         all_game_records.extend(game_records)

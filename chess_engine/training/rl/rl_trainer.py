@@ -287,12 +287,13 @@ class RLTrainer:
             start_iteration = (
                 self.current_iteration + 1 if self.current_iteration > 0 else 0
             )
-            for iteration in range(start_iteration, self.config.num_iterations):
+            end_iteration = start_iteration + self.config.num_iterations
+            for iteration in range(start_iteration, end_iteration):
                 self.current_iteration = iteration
                 iteration_start = time.time()
 
                 print(f"\n{'='*80}")
-                print(f"ITERATION {iteration + 1}/{self.config.num_iterations}")
+                print(f"ITERATION {iteration + 1}/{end_iteration}")
                 print(f"{'='*80}")
 
                 # Step 1: Self-play
@@ -311,7 +312,9 @@ class RLTrainer:
                 # β starts at per_beta and reaches per_beta_end by the final iteration,
                 # gradually reducing the IS-correction bias introduced by priority sampling.
                 if self.config.use_prioritized_replay:
-                    progress = iteration / max(1, self.config.num_iterations - 1)
+                    progress = (iteration - start_iteration) / max(
+                        1, self.config.num_iterations - 1
+                    )
                     per_beta = (
                         self.config.per_beta
                         + (self.config.per_beta_end - self.config.per_beta) * progress

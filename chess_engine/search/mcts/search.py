@@ -61,6 +61,7 @@ class MCTS:
         # Dirichlet noise (for training)
         dirichlet_epsilon: float = 0.0,
         dirichlet_alpha: float = 0.3,
+        rnn_max_history: int = 15,
     ):
         """
         Initialize MCTS.
@@ -111,6 +112,7 @@ class MCTS:
             temperature=temperature,
             use_rnn=use_rnn,
             cache=self.cache,
+            rnn_max_history=rnn_max_history,
         )
 
         model.eval()

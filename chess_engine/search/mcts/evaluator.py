@@ -29,6 +29,7 @@ class Evaluator:
         temperature: float = 1.0,
         use_rnn: bool = False,
         cache: Optional[PositionCache] = None,
+        rnn_max_history: int = 15,
     ):
         """
         Initialize evaluator.
@@ -49,6 +50,7 @@ class Evaluator:
         self.temperature = temperature
         self.use_rnn = use_rnn
         self.cache = cache
+        self.history_encoder: Optional[MoveHistory] = MoveHistory(max_length=rnn_max_history) if use_rnn else None
 
     def evaluate_position(
         self, board: chess.Board
@@ -76,20 +78,21 @@ class Evaluator:
 
             # Get predictions
             if self.use_rnn:
-                history_encoder = MoveHistory(max_length=50)
-                move_history, _ = history_encoder.encode_board(board, pad=True)
+                assert self.history_encoder is not None
+                move_history, _ = self.history_encoder.encode_board(board, pad=True)
                 move_history = move_history.unsqueeze(0).to(self.device)
 
                 # Get actual sequence length (not padded length)
                 # Ensure minimum length of 1 to avoid pack_padded_sequence error
-                actual_length = max(1, min(len(board.move_stack), 50))
+                actual_length = max(1, min(len(board.move_stack), self.history_encoder.max_length))
                 seq_length = torch.LongTensor([actual_length])
 
                 policy_logits, value, _ = self.model(
                     board_tensor, move_history, seq_length
                 )
             else:
-                policy_logits, value, _ = self.model(board_tensor)
+                output = self.model(board_tensor)
+                policy_logits, value = output[0], output[1]
 
             # Convert to move probabilities
             policy_probs = self.move_encoder.policy_to_move_probs(
@@ -125,18 +128,17 @@ class Evaluator:
 
             # Get predictions
             if self.use_rnn:
-                history_encoder = MoveHistory(max_length=50)
-
+                assert self.history_encoder is not None
                 # Encode all move histories
                 move_histories = []
                 seq_lengths = []
 
                 for node in nodes:
-                    move_history, _ = history_encoder.encode_board(node.board, pad=True)
+                    move_history, _ = self.history_encoder.encode_board(node.board, pad=True)
                     move_histories.append(move_history)
 
                     # Ensure minimum length of 1 to avoid pack_padded_sequence error
-                    actual_length = max(1, min(len(node.board.move_stack), 50))
+                    actual_length = max(1, min(len(node.board.move_stack), self.history_encoder.max_length))
                     seq_lengths.append(actual_length)
 
                 move_histories = torch.stack(move_histories).to(self.device)
@@ -146,7 +148,8 @@ class Evaluator:
                     board_tensors, move_histories, seq_lengths
                 )
             else:
-                policy_logits, values, _ = self.model(board_tensors)
+                output = self.model(board_tensors)
+                policy_logits, values = output[0], output[1]
 
             # Convert to move probabilities
             policies = []

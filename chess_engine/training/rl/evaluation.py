@@ -218,13 +218,17 @@ def execute_evaluation_step(
     updated_best_iteration = best_iteration
     updated_best_win_rate = best_win_rate
 
-    if win_rate >= config.win_threshold:
+    if win_rate >= config.win_threshold and win_rate > best_win_rate:
         print(
-            f"\n🏆 New best model! (win rate: {win_rate:.1%} >= {config.win_threshold:.1%})"
+            f"\n🏆 New best model! (win rate: {win_rate:.1%} >= {config.win_threshold:.1%}, beats previous best {best_win_rate:.1%})"
         )
         should_update_best = True
         updated_best_iteration = current_iteration
         updated_best_win_rate = win_rate
+    elif win_rate >= config.win_threshold:
+        print(
+            f"\n   Passed threshold ({win_rate:.1%} >= {config.win_threshold:.1%}) but not better than current best ({best_win_rate:.1%})"
+        )
     else:
         print(
             f"\n   Current model not better than best (need {config.win_threshold:.1%})"
