@@ -39,6 +39,7 @@ class HybridChessNet(nn.Module):
                 cnn_feature_size=config.cnn_filters,
                 rnn_context_size=config.rnn_output_size,
                 fusion_type=config.fusion_type,
+                gate_bias=config.fusion_gate_bias,
             )
 
             head_channels = self.fusion.output_size

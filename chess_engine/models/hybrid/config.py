@@ -23,6 +23,7 @@ class HybridModelConfig:
 
     # ===== Fusion =====
     fusion_type: Literal["concat", "gated", "attention"] = "gated"
+    fusion_gate_bias: float = 2.2  # sigmoid(2.2) ≈ 0.90 → CNN dominates at init
 
     # ===== Output =====
     num_actions: int = 4672

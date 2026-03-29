@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Optional, cast
 
 import torch
 import torch.nn as nn
@@ -36,6 +36,7 @@ class FeatureFusion(nn.Module):
         rnn_context_size: int,
         fusion_type: str = "gated",
         log_gates: bool = False,
+        gate_bias: float = 2.2,
     ):
         """
         Args:
@@ -61,6 +62,7 @@ class FeatureFusion(nn.Module):
                 nn.Linear(cnn_feature_size + rnn_context_size, cnn_feature_size),
                 nn.Sigmoid(),
             )
+            nn.init.constant_(cast(nn.Linear, self.gate[0]).bias, gate_bias)
             self.rnn_projection = nn.Linear(rnn_context_size, cnn_feature_size)
             self.output_size = cnn_feature_size
 
