@@ -23,17 +23,89 @@ from chess_engine.training.self_play.stats import SelfPlayStatistics
 from chess_engine.training.self_play.game_runner import SelfPlayGameRunner
 
 
-def _play_single_game_worker(
-    model_path: str, config_dict: dict, game_num: int
-) -> Tuple[List[Dict], str, bool]:
-    """Worker function for parallel game execution."""
-    # IMPORTANT: Ignore keyboard interrupts in worker processes
+# Per-worker process state — populated once by _init_worker(), reused per game.
+_worker_runner: Optional["SelfPlayGameRunner"] = None
+_worker_device: Optional[torch.device] = None
+
+
+def _init_worker(model_path: str, config_dict: dict) -> None:
+    """
+    Pool initializer — runs once per worker process.
+    Loads model from disk and wires up SelfPlayGameRunner into module globals.
+    """
+    global _worker_runner, _worker_device
+
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-    # Re-initialize model in worker process
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _worker_device = device
+
+    model_config = HybridModelConfig(
+        cnn_input_channels=22,
+        cnn_filters=config_dict["cnn_filters"],
+        cnn_residual_blocks=config_dict["cnn_blocks"],
+        cnn_dropout=config_dict.get("cnn_dropout", 0.0),
+        use_rnn=config_dict["use_rnn"],
+        rnn_hidden_size=config_dict.get("rnn_hidden_size", 256),
+        rnn_num_layers=config_dict.get("rnn_layers", 2),
+        rnn_dropout=config_dict.get("rnn_dropout", 0.0),
+        rnn_use_attention=config_dict.get("rnn_use_attention", False),
+        rnn_bidirectional=config_dict.get("rnn_bidirectional", False),
+        fusion_type=config_dict.get("fusion_type", "gated"),
+        num_actions=config_dict["num_actions"],
+    )
+
+    model = HybridChessNet(model_config).to(device)
+    state = torch.load(model_path, map_location=device, weights_only=False)
+    state_dict = state["model_state_dict"] if "model_state_dict" in state else state
+    model.load_state_dict(state_dict)
+    model.eval()
+
+    config = SelfPlayConfig(
+        num_simulations=config_dict["num_simulations"],
+        c_puct=config_dict["c_puct"],
+        temperature=config_dict["temperature"],
+        temperature_threshold=config_dict["temperature_threshold"],
+        max_moves=config_dict["max_moves"],
+        use_rnn=config_dict["use_rnn"],
+        rnn_max_history=config_dict.get("rnn_max_history", 15),  # restore this
+        late_game_temperature=config_dict["late_game_temperature"],
+        dirichlet_alpha=config_dict["dirichlet_alpha"],
+        resign_threshold=config_dict["resign_threshold"],
+    )
+
+    _worker_runner = SelfPlayGameRunner(model=model, device=device, config=config)
+
+
+def _play_game_worker(game_num: int) -> Tuple[List[Dict], str, bool]:
+    """
+    Lightweight per-game worker — model already loaded by _init_worker().
+    Plays one game and returns serialized examples.
+    """
+    assert _worker_runner is not None, "_init_worker() was not called"
+
+    examples, result, resigned = _worker_runner.play_game()
+
+    serialized = [
+        {
+            "fen": ex.fen,
+            "policy": ex.policy,
+            "value": ex.value,
+            "move_number": ex.move_number,
+        }
+        for ex in examples
+    ]
+    return serialized, result, resigned
+
+
+def _play_single_game_worker_legacy(
+    model_path: str, config_dict: dict, game_num: int
+) -> Tuple[List[Dict], str, bool]:
+    """Legacy worker — loads model on every call. Kept for debugging only."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load model
     model_config = HybridModelConfig(
         cnn_input_channels=22,
         cnn_filters=config_dict["cnn_filters"],
@@ -56,7 +128,6 @@ def _play_single_game_worker(
     model.load_state_dict(state_dict)
     model.eval()
 
-    # Create config
     config = SelfPlayConfig(
         num_simulations=config_dict["num_simulations"],
         c_puct=config_dict["c_puct"],
@@ -69,11 +140,9 @@ def _play_single_game_worker(
         resign_threshold=config_dict["resign_threshold"],
     )
 
-    # Create worker and play game
     worker = SelfPlayGameRunner(model=model, device=device, config=config)
     examples, result, resigned = worker.play_game()
 
-    # Serialize examples
     serialized = [
         {
             "fen": ex.fen,
@@ -161,17 +230,16 @@ class ParallelSelfPlay:
             **self.model_config,
         }
 
-        # Create arguments
-        game_args = [
-            (self.model_path, config_dict, game_num) for game_num in range(num_games)
-        ]
-
         # Play games in parallel
-        with Pool(processes=self.num_workers) as pool:
+        with Pool(
+            processes=self.num_workers,
+            initializer=_init_worker,
+            initargs=(self.model_path, config_dict),
+        ) as pool:
             try:
                 results = list(
                     tqdm(
-                        pool.starmap(_play_single_game_worker, game_args),
+                        pool.imap(_play_game_worker, range(num_games)),
                         total=num_games,
                         desc="Self-play (parallel)",
                     )

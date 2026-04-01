@@ -52,6 +52,7 @@ def execute_self_play_step(
         temperature_threshold=config.temperature_threshold,
         max_moves=config.max_moves_per_game,
         use_rnn=config.use_rnn,
+        rnn_max_history=config.rnn_max_history,
         dirichlet_alpha=config.dirichlet_alpha,
         resign_threshold=config.resign_threshold,
     )

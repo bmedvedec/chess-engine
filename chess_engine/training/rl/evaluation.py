@@ -56,6 +56,7 @@ def play_evaluation_game(
         use_rnn=config.use_rnn,
         temperature=config.temperature,
         cache=PositionCache(max_size=50_000),
+        rnn_max_history=config.rnn_max_history,
     )
 
     best_evaluator = Evaluator(
@@ -66,6 +67,7 @@ def play_evaluation_game(
         use_rnn=config.use_rnn,
         temperature=config.temperature,
         cache=PositionCache(max_size=50_000),
+        rnn_max_history=config.rnn_max_history,
     )
 
     # --- MCTS instances ---
@@ -78,6 +80,7 @@ def play_evaluation_game(
         c_puct=config.c_puct,
         use_rnn=config.use_rnn,
         temperature=config.temperature,
+        rnn_max_history=config.rnn_max_history,
     )
 
     best_mcts = MCTS(
@@ -89,6 +92,7 @@ def play_evaluation_game(
         c_puct=config.c_puct,
         use_rnn=config.use_rnn,
         temperature=config.temperature,
+        rnn_max_history=config.rnn_max_history,
     )
 
     # Play game

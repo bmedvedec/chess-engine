@@ -65,6 +65,7 @@ class RLTrainingConfig:
     rnn_layers: int = 2
     rnn_use_attention: bool = False
     rnn_bidirectional: bool = False
+    rnn_max_history: int = 15  # Max move history length fed to LSTM (shorter = faster)
 
     fusion_type: Literal["concat", "gated", "attention"] = "gated"
     num_actions: int = 4672  # AlphaZero-style: 64 squares × 73 move types
@@ -76,7 +77,7 @@ class RLTrainingConfig:
     learning_rate: float = 0.001
     weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
-    value_loss_weight: float = 2.0
+    value_loss_weight: float = 1.0
 
     # =====================
     # Optimizer settings

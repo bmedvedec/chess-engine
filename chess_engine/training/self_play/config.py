@@ -25,6 +25,7 @@ class SelfPlayConfig:
     temperature_threshold: int = DEFAULT_TEMPERATURE_THRESHOLD
     max_moves: int = DEFAULT_MAX_MOVES
     use_rnn: bool = False
+    rnn_max_history: int = 15
     late_game_temperature: float = LATE_GAME_TEMPERATURE
     dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
     resign_threshold: float = DEFAULT_RESIGN_THRESHOLD
@@ -41,6 +42,7 @@ class SelfPlayConfig:
             ),
             max_moves=getattr(args, "max_moves", DEFAULT_MAX_MOVES),
             use_rnn=getattr(args, "use_rnn", False),
+            rnn_max_history=getattr(args, "rnn_max_history", 15),
             dirichlet_alpha=getattr(args, "dirichlet_alpha", DEFAULT_DIRICHLET_ALPHA),
             resign_threshold=getattr(
                 args, "resign_threshold", DEFAULT_RESIGN_THRESHOLD

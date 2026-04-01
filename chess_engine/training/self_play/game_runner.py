@@ -81,6 +81,7 @@ class SelfPlayGameRunner:
             dirichlet_epsilon=0.25,
             dirichlet_alpha=self.config.dirichlet_alpha,
             use_rnn=self.config.use_rnn,
+            rnn_max_history=self.config.rnn_max_history,
         )
 
     def play_game(
