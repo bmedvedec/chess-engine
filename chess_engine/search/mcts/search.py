@@ -52,7 +52,7 @@ class MCTS:
         enable_caching: bool = True,
         max_cache_size: int = 10000,
         # Batch evaluation
-        eval_batch_size: int = 8,
+        eval_batch_size: int = 16,
         # Progressive widening
         use_progressive_widening: bool = False,
         # Early termination

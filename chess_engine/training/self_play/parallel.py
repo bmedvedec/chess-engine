@@ -68,10 +68,13 @@ def _init_worker(model_path: str, config_dict: dict) -> None:
         temperature_threshold=config_dict["temperature_threshold"],
         max_moves=config_dict["max_moves"],
         use_rnn=config_dict["use_rnn"],
-        rnn_max_history=config_dict.get("rnn_max_history", 15),  # restore this
+        rnn_max_history=config_dict.get("rnn_max_history", 15),
         late_game_temperature=config_dict["late_game_temperature"],
         dirichlet_alpha=config_dict["dirichlet_alpha"],
+        dirichlet_epsilon=config_dict["dirichlet_epsilon"],
         resign_threshold=config_dict["resign_threshold"],
+        value_blend_alpha=config_dict["value_blend_alpha"],
+        draw_value_penalty=config_dict["draw_value_penalty"],
     )
 
     _worker_runner = SelfPlayGameRunner(model=model, device=device, config=config)
@@ -84,7 +87,7 @@ def _play_game_worker(game_num: int) -> Tuple[List[Dict], str, bool]:
     """
     assert _worker_runner is not None, "_init_worker() was not called"
 
-    examples, result, resigned = _worker_runner.play_game()
+    examples, result, resigned = _worker_runner.play_game(max_moves=_worker_runner.config.max_moves)
 
     serialized = [
         {
@@ -135,13 +138,17 @@ def _play_single_game_worker_legacy(
         temperature_threshold=config_dict["temperature_threshold"],
         max_moves=config_dict["max_moves"],
         use_rnn=config_dict["use_rnn"],
+        rnn_max_history=config_dict["rnn_max_history"],
         late_game_temperature=config_dict["late_game_temperature"],
         dirichlet_alpha=config_dict["dirichlet_alpha"],
+        dirichlet_epsilon=config_dict["dirichlet_epsilon"],
         resign_threshold=config_dict["resign_threshold"],
+        value_blend_alpha=config_dict["value_blend_alpha"],
+        draw_value_penalty=config_dict["draw_value_penalty"],
     )
 
     worker = SelfPlayGameRunner(model=model, device=device, config=config)
-    examples, result, resigned = worker.play_game()
+    examples, result, resigned = worker.play_game(max_moves=config.max_moves)
 
     serialized = [
         {
@@ -224,7 +231,11 @@ class ParallelSelfPlay:
             "use_rnn": self.config.use_rnn,
             "late_game_temperature": self.config.late_game_temperature,
             "dirichlet_alpha": self.config.dirichlet_alpha,
+            "dirichlet_epsilon": self.config.dirichlet_epsilon,
             "resign_threshold": self.config.resign_threshold,
+            "rnn_max_history": self.config.rnn_max_history,
+            "value_blend_alpha": self.config.value_blend_alpha,
+            "draw_value_penalty": self.config.draw_value_penalty,
             # Model architecture fields required by each worker process to
             # reconstruct HybridModelConfig without access to the main process.
             **self.model_config,

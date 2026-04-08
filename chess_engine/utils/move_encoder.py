@@ -275,14 +275,23 @@ class MoveEncoder:
         if temperature != 1.0:
             policy_logits = policy_logits / temperature
 
-        legal_mask = self.create_legal_moves_mask(board)
-        masked_logits = policy_logits.clone()
-        masked_logits[legal_mask == 0] = -1e10
+        # Single pass over legal moves: collect indices, build masked logits, return dict.
+        # Avoids clone() of the full 4672-element tensor and a second legal-moves iteration.
+        legal_moves = list(board.legal_moves)
+        legal_indices = [self.encode_move(m) for m in legal_moves]
+
+        masked_logits = torch.full(
+            (self.num_moves,),
+            -1e10,
+            dtype=policy_logits.dtype,
+            device=policy_logits.device,
+        )
+        for idx in legal_indices:
+            masked_logits[idx] = policy_logits[idx]
 
         probs = torch.softmax(masked_logits, dim=0)
-
         return {
-            move: probs[self.encode_move(move)].item() for move in board.legal_moves
+            move: probs[idx].item() for move, idx in zip(legal_moves, legal_indices)
         }
 
     def sample_move(

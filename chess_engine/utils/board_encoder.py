@@ -19,7 +19,6 @@ Col/File mapping: col 0 = file 'a', col 7 = file 'h'
 """
 
 import chess
-import numpy as np
 import torch
 from typing import List
 
@@ -54,32 +53,18 @@ class BoardEncoder:
         Returns:
             torch.Tensor of shape (22, 8, 8)
         """
-        # Initialize empty tensor
-        tensor = np.zeros(
-            (self.num_channels, self.board_size, self.board_size), dtype=np.float32
+        # Allocate directly as a torch tensor (avoids numpy alloc + from_numpy copy)
+        tensor = torch.zeros(
+            (self.num_channels, self.board_size, self.board_size), dtype=torch.float32
         )
-        # This creates a 3D array: 20 layers, each 8x8, with all values starting at 0.0
 
         # Encode piece positions (channels 0-11)
-        for square in chess.SQUARES:  # Loop through all 64 squares (A1: 0..., H8: 63)
-            piece = board.piece_at(square)
-            if piece is not None:
-                # Determine if piece belongs to current player or opponent
-                is_own_piece = piece.color == board.turn
-
-                # Get piece type channel
-                piece_channel = self.PIECE_TO_CHANNEL[piece.piece_type]
-
-                # Add 6 if opponent's piece
-                if not is_own_piece:
-                    piece_channel += 6
-
-                # Convert square to row, col (rank, file)
-                row = square // 8
-                col = square % 8
-
-                # Mark this square as occupied in the appropriate channel
-                tensor[piece_channel, row, col] = 1.0
+        # piece_map() returns only occupied squares (~16-32 entries vs 64 for chess.SQUARES)
+        for square, piece in board.piece_map().items():
+            piece_channel = self.PIECE_TO_CHANNEL[piece.piece_type]
+            if piece.color != board.turn:
+                piece_channel += 6
+            tensor[piece_channel, square // 8, square % 8] = 1.0
 
         # Channel 12: Color to move (1 for white, 0 for black)
         tensor[12, :, :] = float(board.turn)
@@ -95,9 +80,7 @@ class BoardEncoder:
 
         # Channel 18: En passant square
         if board.ep_square is not None:
-            row = board.ep_square // 8
-            col = board.ep_square % 8
-            tensor[18, row, col] = 1.0
+            tensor[18, board.ep_square // 8, board.ep_square % 8] = 1.0
 
         # Channel 19: Halfmove clock (normalized by 100 for 50-move rule)
         tensor[19, :, :] = board.halfmove_clock / 100.0
@@ -105,14 +88,14 @@ class BoardEncoder:
         # Channel 20: 2-fold repetition indicator (binary)
         # True when the current position has occurred at least twice in the game.
         # Requires a populated move stack; returns False for positions loaded from FEN only.
-        tensor[20, :, :] = float(board.is_repetition(2))
+        is_rep2 = board.is_repetition(2)
+        tensor[20, :, :] = float(is_rep2)
 
         # Channel 21: 3-fold repetition indicator (binary)
         # True when the current position has occurred at least three times (draw claimable).
-        # Requires a populated move stack; returns False for positions loaded from FEN only.
-        tensor[21, :, :] = float(board.is_repetition(3))
+        tensor[21, :, :] = float(is_rep2 and board.is_repetition(3))
 
-        return torch.from_numpy(tensor)
+        return tensor
 
     def batch_boards_to_tensor(self, boards: List[chess.Board]) -> torch.Tensor:
         """

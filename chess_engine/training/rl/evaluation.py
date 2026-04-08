@@ -81,6 +81,8 @@ def play_evaluation_game(
         use_rnn=config.use_rnn,
         temperature=config.temperature,
         rnn_max_history=config.rnn_max_history,
+        dirichlet_epsilon=0.0,  # no exploration noise during evaluation
+        dirichlet_alpha=config.dirichlet_alpha,
     )
 
     best_mcts = MCTS(
@@ -93,6 +95,8 @@ def play_evaluation_game(
         use_rnn=config.use_rnn,
         temperature=config.temperature,
         rnn_max_history=config.rnn_max_history,
+        dirichlet_epsilon=0.0,  # no exploration noise during evaluation
+        dirichlet_alpha=config.dirichlet_alpha,
     )
 
     # Play game

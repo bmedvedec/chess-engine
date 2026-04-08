@@ -118,8 +118,15 @@ class MCTSNode:
         best_score = -float("inf")
         best_child: Optional["MCTSNode"] = None
 
+        # Pre-compute sqrt(parent_visits) once instead of once per child
+        sqrt_parent = math.sqrt(self.visit_count) if self.visit_count > 0 else 0.0
+
         for child in self.children.values():
-            score = child.ucb_score(c_puct, self.visit_count)
+            vl = child.virtual_loss
+            vc = child.visit_count
+            eff_visits = vc + vl
+            q = (child.value_sum - vl) / eff_visits if eff_visits > 0 else 0.0
+            score = q + c_puct * child.prior * sqrt_parent / (1 + vc + vl)
             if score > best_score:
                 best_score = score
                 best_child = child
@@ -143,18 +150,18 @@ class MCTSNode:
         if self.is_expanded:
             return
 
-        # Sort moves by prior probability
-        sorted_moves = sorted(policy_probs.items(), key=lambda x: x[1], reverse=True)
-
-        if progressive and len(sorted_moves) > 20:
+        if progressive and len(policy_probs) > 20:
             # Progressive widening: expand only top moves initially
-            # Expand more as node is visited more
+            sorted_moves = sorted(
+                policy_probs.items(), key=lambda x: x[1], reverse=True
+            )
             num_to_expand = min(
                 len(sorted_moves), int(5 + 2 * math.sqrt(self.visit_count))
             )
             moves_to_expand = [m for m, _ in sorted_moves[:num_to_expand]]
         else:
-            moves_to_expand = [m for m, _ in sorted_moves]
+            # Skip sort entirely — order doesn't matter when expanding all moves
+            moves_to_expand = policy_probs.keys()
 
         for move in moves_to_expand:
             # Create child board

@@ -50,11 +50,15 @@ def execute_self_play_step(
         c_puct=config.c_puct,
         temperature=config.temperature,
         temperature_threshold=config.temperature_threshold,
+        late_game_temperature=config.late_game_temperature,
         max_moves=config.max_moves_per_game,
         use_rnn=config.use_rnn,
         rnn_max_history=config.rnn_max_history,
         dirichlet_alpha=config.dirichlet_alpha,
+        dirichlet_epsilon=config.dirichlet_epsilon,
         resign_threshold=config.resign_threshold,
+        value_blend_alpha=config.value_blend_alpha,
+        draw_value_penalty=config.draw_value_penalty,
     )
 
     # Generate games

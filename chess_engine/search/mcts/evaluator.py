@@ -50,7 +50,9 @@ class Evaluator:
         self.temperature = temperature
         self.use_rnn = use_rnn
         self.cache = cache
-        self.history_encoder: Optional[MoveHistory] = MoveHistory(max_length=rnn_max_history) if use_rnn else None
+        self.history_encoder: Optional[MoveHistory] = (
+            MoveHistory(max_length=rnn_max_history) if use_rnn else None
+        )
 
     def evaluate_position(
         self, board: chess.Board
@@ -64,9 +66,9 @@ class Evaluator:
         Returns:
             Tuple of (policy_probs, value)
         """
-        # Check cache first
-        if self.cache is not None:
-            fen = board.fen()
+        # Check cache first — compute FEN once, reuse for put() below
+        fen = board.fen() if self.cache is not None else None
+        if self.cache is not None and fen is not None:
             cached = self.cache.get(fen)
             if cached is not None:
                 return cached
@@ -84,7 +86,9 @@ class Evaluator:
 
                 # Get actual sequence length (not padded length)
                 # Ensure minimum length of 1 to avoid pack_padded_sequence error
-                actual_length = max(1, min(len(board.move_stack), self.history_encoder.max_length))
+                actual_length = max(
+                    1, min(len(board.move_stack), self.history_encoder.max_length)
+                )
                 seq_length = torch.LongTensor([actual_length])
 
                 policy_logits, value, _ = self.model(
@@ -101,9 +105,8 @@ class Evaluator:
 
             value = value.item()
 
-        # Cache result if enabled
-        if self.cache is not None:
-            fen = board.fen()
+        # Cache result if enabled (fen already computed above)
+        if self.cache is not None and fen is not None:
             self.cache.put(fen, policy_probs, value)
 
         return policy_probs, value
@@ -134,11 +137,18 @@ class Evaluator:
                 seq_lengths = []
 
                 for node in nodes:
-                    move_history, _ = self.history_encoder.encode_board(node.board, pad=True)
+                    move_history, _ = self.history_encoder.encode_board(
+                        node.board, pad=True
+                    )
                     move_histories.append(move_history)
 
                     # Ensure minimum length of 1 to avoid pack_padded_sequence error
-                    actual_length = max(1, min(len(node.board.move_stack), self.history_encoder.max_length))
+                    actual_length = max(
+                        1,
+                        min(
+                            len(node.board.move_stack), self.history_encoder.max_length
+                        ),
+                    )
                     seq_lengths.append(actual_length)
 
                 move_histories = torch.stack(move_histories).to(self.device)

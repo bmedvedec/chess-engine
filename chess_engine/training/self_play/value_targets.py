@@ -7,7 +7,7 @@ Provides resignation checking for self-play games.
 from typing import Dict, Optional
 
 
-def should_resign(stats: Optional[Dict], threshold: float = -0.9) -> bool:
+def should_resign(stats: Optional[Dict], threshold: float = -0.45) -> bool:
     """
     Check if the position is hopeless and should resign.
 

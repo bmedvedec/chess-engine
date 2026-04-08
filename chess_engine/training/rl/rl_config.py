@@ -40,13 +40,20 @@ class RLTrainingConfig:
     # =====================
     # Self-play configuration
     # =====================
-    num_simulations: int = 200
-    c_puct: float = 2.0
+    num_simulations: int = 100
+    c_puct: float = 1.5
     temperature: float = 1.5
-    temperature_threshold: int = 15
-    max_moves_per_game: int = 200
-    dirichlet_alpha: float = 0.3
-    resign_threshold: float = -0.9
+    temperature_threshold: int = 50
+    late_game_temperature: float = 0.3
+    max_moves_per_game: int = 150  # shorter games force more decisive outcomes
+    dirichlet_alpha: float = 0.5
+    dirichlet_epsilon: float = 0.35  # weight of noise at root
+    resign_threshold: float = -0.45
+
+    # Value target blending: mix MCTS root value with game outcome after each game.
+    # Prevents the draw-collapse loop where MCTS estimates ~0 and the network learns ~0.
+    value_blend_alpha: float = 0.30
+    draw_value_penalty: float = 0.50
 
     # =====================
     # Parallel self-play
@@ -77,7 +84,7 @@ class RLTrainingConfig:
     learning_rate: float = 0.001
     weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
-    value_loss_weight: float = 1.0
+    value_loss_weight: float = 2.0
 
     # =====================
     # Optimizer settings

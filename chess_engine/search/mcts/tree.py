@@ -4,6 +4,7 @@ MCTS - Tree Operations
 Tree traversal utilities: backpropagation, early termination check, and statistics.
 """
 
+import heapq
 from typing import Dict, List
 
 from chess_engine.search.mcts.node import MCTSNode
@@ -46,13 +47,12 @@ def should_terminate_early(
     if len(visit_counts) < 2:
         return False
 
-    visit_counts_sorted = sorted(visit_counts, reverse=True)
+    # heapq.nlargest(2) is O(N) vs O(N log N) for a full sort
+    top2 = heapq.nlargest(2, visit_counts)
+    total = sum(visit_counts)
 
-    # If best move has >threshold% of visits and 2x more than second best
-    best_ratio = visit_counts_sorted[0] / sum(visit_counts)
-    if best_ratio > threshold:
-        if visit_counts_sorted[0] > 2 * visit_counts_sorted[1]:
-            return True
+    if top2[0] / total > threshold and top2[0] > 2 * top2[1]:
+        return True
 
     return False
 

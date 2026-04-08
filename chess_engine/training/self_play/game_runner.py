@@ -78,14 +78,14 @@ class SelfPlayGameRunner:
             device=self.device,
             num_simulations=self.config.num_simulations,
             c_puct=self.config.c_puct,
-            dirichlet_epsilon=0.25,
+            dirichlet_epsilon=self.config.dirichlet_epsilon,
             dirichlet_alpha=self.config.dirichlet_alpha,
             use_rnn=self.config.use_rnn,
             rnn_max_history=self.config.rnn_max_history,
         )
 
     def play_game(
-        self, max_moves: int = 200, verbose: bool = False
+        self, max_moves: int = 100, verbose: bool = False
     ) -> Tuple[List[GameExample], str, bool]:
         """
         Play one self-play game.
@@ -121,8 +121,8 @@ class SelfPlayGameRunner:
                 self.evaluator.temperature = temp
 
                 try:
-                    # Run MCTS
-                    move, stats = self.mcts.search(board, return_stats=True)
+                    # Run MCTS (batched: fewer GPU round-trips than search())
+                    move, stats = self.mcts.search_batched(board, return_stats=True)
 
                     if stats is None or move not in board.legal_moves:
                         raise ValueError(f"MCTS returned illegal move: {move}")
@@ -170,6 +170,24 @@ class SelfPlayGameRunner:
                 else:
                     result = "1/2-1/2"  # Max moves reached
 
+            # Blend MCTS root values with game outcome to break draw-collapse loop.
+            # Pure MCTS values collapse toward 0 when all games are draws
+            # mixing in the actual outcome restores a meaningful training signal.
+            if examples:
+                if result == "1-0":
+                    white_outcome = 1.0
+                elif result == "0-1":
+                    white_outcome = -1.0
+                else:
+                    # Slight penalty so the model doesn't learn to seek draws
+                    white_outcome = -self.config.draw_value_penalty
+
+                alpha = self.config.value_blend_alpha
+                for ex in examples:
+                    fen_turn = ex.fen.split()[1]  # 'w' or 'b'
+                    game_val = white_outcome if fen_turn == "w" else -white_outcome
+                    ex.value = alpha * ex.value + (1.0 - alpha) * game_val
+
             if verbose:
                 print(f"   Game over: {result}")
                 if resigned:
@@ -209,7 +227,7 @@ class SelfPlayGameRunner:
         print(f"\nPlaying {num_games} self-play games...")
 
         for i in tqdm(range(num_games), desc="Self-play"):
-            examples, result, resigned = self.play_game()
+            examples, result, resigned = self.play_game(max_moves=self.config.max_moves)
             all_examples.extend(examples)
             stats.update(result, len(examples), len(examples), resigned)
 
