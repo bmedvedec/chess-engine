@@ -277,7 +277,7 @@ def execute_training_step(
             batch_size=config.batch_size,
             shuffle=True,
             num_workers=0,
-            pin_memory=True if device.type == "cuda" else False,
+            pin_memory=device.type == "cuda",
         )
 
         # Training loop
@@ -287,7 +287,7 @@ def execute_training_step(
         pbar = tqdm(total=num_epochs * steps_per_epoch, desc="Training")
 
         for epoch in range(num_epochs):
-            for batch_idx, (boards, policies, values) in enumerate(dataloader):
+            for boards, policies, values in dataloader:
                 # Move to device
                 boards = boards.to(device)
                 policies = policies.to(device)

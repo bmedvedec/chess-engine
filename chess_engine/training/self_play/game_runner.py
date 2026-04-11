@@ -174,18 +174,20 @@ class SelfPlayGameRunner:
             # Pure MCTS values collapse toward 0 when all games are draws
             # mixing in the actual outcome restores a meaningful training signal.
             if examples:
-                if result == "1-0":
-                    white_outcome = 1.0
-                elif result == "0-1":
-                    white_outcome = -1.0
-                else:
-                    # Slight penalty so the model doesn't learn to seek draws
-                    white_outcome = -self.config.draw_value_penalty
-
                 alpha = self.config.value_blend_alpha
                 for ex in examples:
                     fen_turn = ex.fen.split()[1]  # 'w' or 'b'
-                    game_val = white_outcome if fen_turn == "w" else -white_outcome
+                    if result == "1-0":
+                        # Win for white, loss for black — flip per side
+                        game_val = 1.0 if fen_turn == "w" else -1.0
+                    elif result == "0-1":
+                        # Win for black, loss for white — flip per side
+                        game_val = -1.0 if fen_turn == "w" else 1.0
+                    else:
+                        # Draw: penalise BOTH sides equally — no sign flip.
+                        # Using -white_outcome here would reward black (+penalty),
+                        # cancelling the penalty entirely across the dataset.
+                        game_val = -self.config.draw_value_penalty
                     ex.value = alpha * ex.value + (1.0 - alpha) * game_val
 
             if verbose:

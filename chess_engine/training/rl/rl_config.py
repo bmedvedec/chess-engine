@@ -53,7 +53,7 @@ class RLTrainingConfig:
     # Value target blending: mix MCTS root value with game outcome after each game.
     # Prevents the draw-collapse loop where MCTS estimates ~0 and the network learns ~0.
     value_blend_alpha: float = 0.30
-    draw_value_penalty: float = 0.50
+    draw_value_penalty: float = 0.9
 
     # =====================
     # Parallel self-play

@@ -4,41 +4,127 @@ RL TRAINER - Evaluation
 Head-to-head evaluation between current model and best model using MCTS.
 """
 
-from typing import Dict
+import os
+import signal
+import tempfile
+from multiprocessing import Pool, cpu_count
+from typing import Dict, Optional
 
 import chess
+import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+from chess_engine.models.hybrid.config import HybridModelConfig
+from chess_engine.models.hybrid.hybrid_net import HybridChessNet
 from chess_engine.utils.board_encoder import BoardEncoder
 from chess_engine.utils.move_encoder import MoveEncoder
-from chess_engine.search.mcts.evaluator import Evaluator
-from chess_engine.search.mcts.cache import PositionCache
 from chess_engine.search.mcts.search import MCTS
-from chess_engine.training.self_play.config import SelfPlayConfig
+
+
+# Per-worker process state — populated once by _init_eval_worker(), reused per game.
+_eval_current_mcts: Optional[MCTS] = None
+_eval_best_mcts: Optional[MCTS] = None
+_eval_max_moves: int = 150
+
+
+def _init_eval_worker(current_path: str, best_path: str, config_dict: dict) -> None:
+    """
+    Pool initializer — runs once per worker process.
+    Loads both models from disk and builds MCTS instances into module globals.
+    """
+    global _eval_current_mcts, _eval_best_mcts, _eval_max_moves
+
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _eval_max_moves = config_dict["max_moves"]
+
+    model_config = HybridModelConfig(
+        cnn_input_channels=22,
+        cnn_filters=config_dict["cnn_filters"],
+        cnn_residual_blocks=config_dict["cnn_blocks"],
+        cnn_dropout=config_dict.get("cnn_dropout", 0.0),
+        use_rnn=config_dict["use_rnn"],
+        rnn_hidden_size=config_dict.get("rnn_hidden_size", 256),
+        rnn_num_layers=config_dict.get("rnn_layers", 2),
+        rnn_dropout=config_dict.get("rnn_dropout", 0.0),
+        rnn_use_attention=config_dict.get("rnn_use_attention", False),
+        rnn_bidirectional=config_dict.get("rnn_bidirectional", False),
+        fusion_type=config_dict.get("fusion_type", "gated"),
+        num_actions=config_dict["num_actions"],
+    )
+
+    def _load_model(path: str) -> nn.Module:
+        model = HybridChessNet(model_config).to(device)
+        state = torch.load(path, map_location=device, weights_only=False)
+        state_dict = state["model_state_dict"] if "model_state_dict" in state else state
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model
+
+    board_encoder = BoardEncoder()
+    move_encoder = MoveEncoder()
+
+    _eval_current_mcts = MCTS(
+        model=_load_model(current_path),
+        board_encoder=board_encoder,
+        move_encoder=move_encoder,
+        device=device,
+        num_simulations=config_dict["eval_simulations"],
+        c_puct=config_dict["c_puct"],
+        temperature=0.1,
+        use_rnn=config_dict["use_rnn"],
+        rnn_max_history=config_dict["rnn_max_history"],
+        dirichlet_epsilon=0.0,
+        dirichlet_alpha=config_dict["dirichlet_alpha"],
+    )
+
+    _eval_best_mcts = MCTS(
+        model=_load_model(best_path),
+        board_encoder=board_encoder,
+        move_encoder=move_encoder,
+        device=device,
+        num_simulations=config_dict["eval_simulations"],
+        c_puct=config_dict["c_puct"],
+        temperature=0.1,
+        use_rnn=config_dict["use_rnn"],
+        rnn_max_history=config_dict["rnn_max_history"],
+        dirichlet_epsilon=0.0,
+        dirichlet_alpha=config_dict["dirichlet_alpha"],
+    )
+
+
+def _play_eval_game_worker(game_num: int) -> str:
+    """
+    Lightweight per-game worker — MCTS instances already initialized by _init_eval_worker().
+    Plays one evaluation game and returns the result string.
+    """
+    assert _eval_current_mcts is not None and _eval_best_mcts is not None, \
+        "_init_eval_worker() was not called"
+    return play_evaluation_game(
+        current_mcts=_eval_current_mcts,
+        best_mcts=_eval_best_mcts,
+        current_plays_white=(game_num % 2 == 0),
+        max_moves=_eval_max_moves,
+    )
 
 
 def play_evaluation_game(
-    current_model: nn.Module,
-    best_model: nn.Module,
-    board_encoder: BoardEncoder,
-    move_encoder: MoveEncoder,
-    device,
+    current_mcts: MCTS,
+    best_mcts: MCTS,
     current_plays_white: bool,
-    config: SelfPlayConfig,
+    max_moves: int,
 ) -> str:
     """
     Play single evaluation game between current and best models.
 
     Args:
-        current_model: Current training model
-        best_model: Best model so far
-        board_encoder: Board encoding utility
-        move_encoder: Move encoding utility
-        device: Torch device
+        current_mcts: Pre-built MCTS for the current model (reused across games)
+        best_mcts: Pre-built MCTS for the best model (reused across games)
         current_plays_white: Whether current model plays white
-        config: Self-play configuration
+        max_moves: Maximum moves before declaring draw
 
     Returns:
         "current_win", "best_win", or "draw"
@@ -46,69 +132,13 @@ def play_evaluation_game(
 
     board = chess.Board()
 
-    # Create MCTS for both models
-    # --- Evaluators ---
-    current_evaluator = Evaluator(
-        model=current_model,
-        board_encoder=board_encoder,
-        move_encoder=move_encoder,
-        device=device,
-        use_rnn=config.use_rnn,
-        temperature=config.temperature,
-        cache=PositionCache(max_size=50_000),
-        rnn_max_history=config.rnn_max_history,
-    )
-
-    best_evaluator = Evaluator(
-        model=best_model,
-        board_encoder=board_encoder,
-        move_encoder=move_encoder,
-        device=device,
-        use_rnn=config.use_rnn,
-        temperature=config.temperature,
-        cache=PositionCache(max_size=50_000),
-        rnn_max_history=config.rnn_max_history,
-    )
-
-    # --- MCTS instances ---
-    current_mcts = MCTS(
-        model=current_model,
-        board_encoder=board_encoder,
-        move_encoder=move_encoder,
-        device=device,
-        num_simulations=config.num_simulations,
-        c_puct=config.c_puct,
-        use_rnn=config.use_rnn,
-        temperature=config.temperature,
-        rnn_max_history=config.rnn_max_history,
-        dirichlet_epsilon=0.0,  # no exploration noise during evaluation
-        dirichlet_alpha=config.dirichlet_alpha,
-    )
-
-    best_mcts = MCTS(
-        model=best_model,
-        board_encoder=board_encoder,
-        move_encoder=move_encoder,
-        device=device,
-        num_simulations=config.num_simulations,
-        c_puct=config.c_puct,
-        use_rnn=config.use_rnn,
-        temperature=config.temperature,
-        rnn_max_history=config.rnn_max_history,
-        dirichlet_epsilon=0.0,  # no exploration noise during evaluation
-        dirichlet_alpha=config.dirichlet_alpha,
-    )
-
-    # Play game
     move_count = 0
-    while not board.is_game_over() and move_count < config.max_moves:
-        # Determine which model's turn
+    while not board.is_game_over() and move_count < max_moves:
         if board.turn == chess.WHITE:
             mcts = current_mcts if current_plays_white else best_mcts
         else:
-            mcts = best_mcts if current_plays_white else current_mcts
+            mcts = current_mcts if not current_plays_white else best_mcts
 
-        # Get move
         move, _ = mcts.search(board)
 
         if move is None:
@@ -117,9 +147,7 @@ def play_evaluation_game(
         board.push(move)
         move_count += 1
 
-    # Determine result
     if board.is_checkmate():
-        # Winner is opposite of whose turn it is
         white_won = not board.turn
         if (white_won and current_plays_white) or (
             not white_won and not current_plays_white
@@ -128,7 +156,6 @@ def play_evaluation_game(
         else:
             return "best_win"
     else:
-        # Draw (stalemate, repetition, 50-move, insufficient material, or max moves)
         return "draw"
 
 
@@ -162,50 +189,118 @@ def execute_evaluation_step(
     Returns:
         Tuple of (eval_metrics, updated_best_model_flag, updated_best_iteration, updated_best_win_rate)
     """
-    print(f"\n⚔️  Evaluation: Playing {config.eval_games} games vs best model...")
+    num_workers = config.num_workers or 1
+    print(f"\n⚔️  Evaluation: Playing {config.eval_games} games vs best model"
+          f" ({num_workers} worker{'s' if num_workers > 1 else ''})...")
 
     current_model.eval()
     best_model.eval()
 
-    # Play evaluation games
     wins = 0
     losses = 0
     draws = 0
 
-    eval_config = SelfPlayConfig(
-        num_simulations=config.eval_simulations,
-        c_puct=config.c_puct,
-        temperature=0.1,  # Lower temperature for evaluation
-        temperature_threshold=0,  # Deterministic play
-        max_moves=config.max_moves_per_game,
-        use_rnn=config.use_rnn,
-        dirichlet_alpha=0.0,  # No exploration during evaluation
-        resign_threshold=config.resign_threshold,
-    )
+    if num_workers > 1:
+        # --- Parallel path ---
+        # Save both model state dicts to temp files so worker processes can load them.
+        current_tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
+        best_tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
+        try:
+            torch.save(current_model.state_dict(), current_tmp.name)
+            torch.save(best_model.state_dict(), best_tmp.name)
+            current_tmp.close()
+            best_tmp.close()
 
-    for game_num in tqdm(range(config.eval_games), desc="Evaluation games"):
-        # Alternate colors
-        if game_num % 2 == 0:
-            current_model_plays_white = True
-        else:
-            current_model_plays_white = False
+            config_dict = {
+                "eval_simulations": config.eval_simulations,
+                "c_puct": config.c_puct,
+                "max_moves": config.max_moves_per_game,
+                "use_rnn": config.use_rnn,
+                "rnn_max_history": config.rnn_max_history,
+                "dirichlet_alpha": config.dirichlet_alpha,
+                # Model architecture — needed to reconstruct HybridChessNet in each worker.
+                "cnn_filters": config.cnn_filters,
+                "cnn_blocks": config.cnn_blocks,
+                "use_rnn": config.use_rnn,
+                "rnn_hidden_size": config.rnn_hidden_size,
+                "rnn_layers": config.rnn_layers,
+                "rnn_use_attention": config.rnn_use_attention,
+                "rnn_bidirectional": config.rnn_bidirectional,
+                "fusion_type": config.fusion_type,
+                "num_actions": config.num_actions,
+            }
 
-        result = play_evaluation_game(
-            current_model=current_model,
-            best_model=best_model,
+            with Pool(
+                processes=num_workers,
+                initializer=_init_eval_worker,
+                initargs=(current_tmp.name, best_tmp.name, config_dict),
+            ) as pool:
+                results = list(
+                    tqdm(
+                        pool.imap(_play_eval_game_worker, range(config.eval_games)),
+                        total=config.eval_games,
+                        desc="Evaluation games (parallel)",
+                    )
+                )
+
+            for result in results:
+                if result == "current_win":
+                    wins += 1
+                elif result == "best_win":
+                    losses += 1
+                else:
+                    draws += 1
+
+        finally:
+            os.unlink(current_tmp.name)
+            os.unlink(best_tmp.name)
+
+    else:
+        # --- Sequential path ---
+        # Build MCTS instances once — reused across all eval games.
+        # Cache stays warm between games (deterministic eval revisits same openings).
+        current_mcts = MCTS(
+            model=current_model,
             board_encoder=board_encoder,
             move_encoder=move_encoder,
             device=device,
-            current_plays_white=current_model_plays_white,
-            config=eval_config,
+            num_simulations=config.eval_simulations,
+            c_puct=config.c_puct,
+            temperature=0.1,
+            use_rnn=config.use_rnn,
+            rnn_max_history=config.rnn_max_history,
+            dirichlet_epsilon=0.0,
+            dirichlet_alpha=config.dirichlet_alpha,
         )
 
-        if result == "current_win":
-            wins += 1
-        elif result == "best_win":
-            losses += 1
-        else:
-            draws += 1
+        best_mcts = MCTS(
+            model=best_model,
+            board_encoder=board_encoder,
+            move_encoder=move_encoder,
+            device=device,
+            num_simulations=config.eval_simulations,
+            c_puct=config.c_puct,
+            temperature=0.1,
+            use_rnn=config.use_rnn,
+            rnn_max_history=config.rnn_max_history,
+            dirichlet_epsilon=0.0,
+            dirichlet_alpha=config.dirichlet_alpha,
+        )
+
+        for game_num in tqdm(range(config.eval_games), desc="Evaluation games"):
+            result = play_evaluation_game(
+                current_mcts=current_mcts,
+                best_mcts=best_mcts,
+                current_plays_white=(game_num % 2 == 0),
+                max_moves=config.max_moves_per_game,
+            )
+
+            if result == "current_win":
+                wins += 1
+            elif result == "best_win":
+                losses += 1
+            else:
+                draws += 1
 
     # Calculate win rate
     total_games = wins + losses + draws
