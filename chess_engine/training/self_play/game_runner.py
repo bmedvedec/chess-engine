@@ -104,6 +104,8 @@ class SelfPlayGameRunner:
         examples = []
         move_count = 0
         resigned = False
+        resign_streak = 0
+        _RESIGN_STREAK_REQUIRED = 4
 
         if verbose:
             print("\nStarting self-play game...")
@@ -127,15 +129,23 @@ class SelfPlayGameRunner:
                     if stats is None or move not in board.legal_moves:
                         raise ValueError(f"MCTS returned illegal move: {move}")
 
-                    # Check for resignation (only after move 10)
-                    if move_count > 10 and should_resign(
-                        stats, self.config.resign_threshold
-                    ):
-                        resigned = True
-                        result = "0-1" if board.turn == chess.WHITE else "1-0"
-                        if verbose:
-                            print(f"   Resignation at move {move_count}")
-                        break
+                    if move_count > 10:
+                        if should_resign(stats, self.config.resign_threshold):
+                            resign_streak += 1
+                        else:
+                            resign_streak = 0
+
+                        if resign_streak >= _RESIGN_STREAK_REQUIRED:
+                            resigned = True
+                            result = "0-1" if board.turn == chess.WHITE else "1-0"
+                            if verbose:
+                                root_val = stats.get("root_value", float("nan"))
+                                print(
+                                    f"   Resignation at move {move_count} "
+                                    f"(root_value={root_val:.3f}, "
+                                    f"threshold={self.config.resign_threshold})"
+                                )
+                            break
 
                     # Extract complete policy
                     policy = extract_policy(board, stats)

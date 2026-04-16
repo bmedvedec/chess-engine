@@ -280,11 +280,12 @@ def execute_training_step(
             pin_memory=device.type == "cuda",
         )
 
-        # Training loop
         steps_per_epoch = len(dataloader)
-        num_epochs = max(1, config.training_steps_per_iteration // steps_per_epoch)
+        num_epochs = max(
+            1, -(-config.training_steps_per_iteration // steps_per_epoch)
+        )  # ceiling division
 
-        pbar = tqdm(total=num_epochs * steps_per_epoch, desc="Training")
+        pbar = tqdm(total=config.training_steps_per_iteration, desc="Training")
 
         for epoch in range(num_epochs):
             for boards, policies, values in dataloader:

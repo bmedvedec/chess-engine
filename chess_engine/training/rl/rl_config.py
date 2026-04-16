@@ -48,12 +48,14 @@ class RLTrainingConfig:
     max_moves_per_game: int = 150  # shorter games force more decisive outcomes
     dirichlet_alpha: float = 0.5
     dirichlet_epsilon: float = 0.35  # weight of noise at root
+    # Resign threshold: fire when raw MCTS root_value < this for 4 consecutive moves.
+    # CALIBRATION NOTE: raw MCTS values depend on what the value head has learned.
     resign_threshold: float = -0.45
 
     # Value target blending: mix MCTS root value with game outcome after each game.
     # Prevents the draw-collapse loop where MCTS estimates ~0 and the network learns ~0.
     value_blend_alpha: float = 0.30
-    draw_value_penalty: float = 0.9
+    draw_value_penalty: float = 0.75
 
     # =====================
     # Parallel self-play
@@ -67,7 +69,7 @@ class RLTrainingConfig:
     cnn_blocks: int = 10
     cnn_filters: int = 256
 
-    use_rnn: bool = False
+    use_rnn: bool = True
     rnn_hidden_size: int = 256
     rnn_layers: int = 2
     rnn_use_attention: bool = False
@@ -90,9 +92,16 @@ class RLTrainingConfig:
     # Optimizer settings
     # =====================
     optimizer: str = "adam"
-    lr_schedule: str = "constant"
-    lr_decay_steps: int = 10
-    lr_decay_gamma: float = 0.5
+    # lr_schedule options:
+    #   "constant" — fixed LR for the entire run (original behaviour)
+    #   "step"     — StepLR: multiply LR by lr_decay_gamma every lr_decay_steps iterations
+    #   "cosine"   — CosineAnnealingLR: smooth decay to lr_min over num_iterations
+    #   "plateau"  — ReduceLROnPlateau: reduce by lr_decay_gamma after lr_decay_steps
+    #                iterations with no improvement in training loss (most adaptive)
+    lr_schedule: str = "plateau"
+    lr_decay_steps: int = 50  # StepLR: decay period; Plateau: patience (iters)
+    lr_decay_gamma: float = 0.5  # multiplicative decay factor (LR *= gamma)
+    lr_min: float = 1e-5  # floor for cosine / plateau schedules
 
     # =====================
     # Replay buffer

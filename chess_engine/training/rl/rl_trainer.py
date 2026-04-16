@@ -212,7 +212,16 @@ class RLTrainer:
             raise ValueError(f"Unknown optimizer: {self.config.optimizer}")
 
     def _create_scheduler(self) -> Optional[Any]:
-        """Create learning rate scheduler"""
+        """Create learning rate scheduler.
+
+        Supported schedules (set via config.lr_schedule):
+          "constant" — no scheduling (original behaviour)
+          "step"     — StepLR: decay LR by lr_decay_gamma every lr_decay_steps iters
+          "cosine"   — CosineAnnealingLR: smooth decay to lr_min over num_iterations
+          "plateau"  — ReduceLROnPlateau: reduce after lr_decay_steps iters of no
+                       improvement in training loss (most adaptive; recommended for
+                       fine-tuning after draw-collapse recovery)
+        """
         if self.config.lr_schedule == "constant":
             return None
         elif self.config.lr_schedule == "step":
@@ -225,6 +234,15 @@ class RLTrainer:
             return optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer,
                 T_max=self.config.num_iterations,
+                eta_min=self.config.lr_min,
+            )
+        elif self.config.lr_schedule == "plateau":
+            return optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode="min",
+                factor=self.config.lr_decay_gamma,
+                patience=self.config.lr_decay_steps,
+                min_lr=self.config.lr_min,
             )
         else:
             return None
@@ -396,7 +414,22 @@ class RLTrainer:
                             f"Best model updated (win rate: {self.best_win_rate:.1%})"
                         )
 
-                # Step 4: Update history and log
+                # Step 4: Learning rate schedule (before logging so CSV captures new LR)
+                if self.scheduler:
+                    lr_before = self.optimizer.param_groups[0]["lr"]
+                    if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                        # ReduceLROnPlateau monitors a metric — use training loss.
+                        # Falls back to 0.0 when training was skipped (small buffer).
+                        self.scheduler.step(train_metrics.get("loss", 0.0))
+                    else:
+                        self.scheduler.step()
+                    lr_after = self.optimizer.param_groups[0]["lr"]
+                    if lr_after != lr_before:
+                        print(
+                            f"\n📉 LR reduced: {lr_before:.6f} → {lr_after:.6f} (scheduler={self.config.lr_schedule})"
+                        )
+
+                # Step 5: Update history and log (uses post-scheduler LR)
                 iteration_seconds = time.time() - iteration_start
                 self._update_history(train_metrics, eval_metrics)
                 self.iter_logger.log(
@@ -413,13 +446,9 @@ class RLTrainer:
                     iteration_seconds=iteration_seconds,
                 )
 
-                # Step 5: Save checkpoint
+                # Step 6: Save checkpoint
                 if (iteration + 1) % self.config.save_frequency == 0:
                     self._save_checkpoint()
-
-                # Step 6: Learning rate schedule
-                if self.scheduler:
-                    self.scheduler.step()
 
                 # Print iteration summary
                 iteration_time = time.time() - iteration_start
@@ -559,8 +588,32 @@ class RLTrainer:
         self.best_model.load_state_dict(checkpoint["best_model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
-        if "scheduler_state_dict" in checkpoint and self.scheduler:
-            self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        actual_ckpt_lr = self.optimizer.param_groups[0]["lr"]
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = self.config.learning_rate
+        if actual_ckpt_lr != self.config.learning_rate:
+            print(
+                f"   LR overridden: {actual_ckpt_lr} → {self.config.learning_rate} (from config)"
+            )
+        else:
+            print(f"   LR: {self.config.learning_rate} (unchanged)")
+
+        checkpoint_schedule = checkpoint.get("config", {}).get("lr_schedule", None)
+        has_scheduler_state = "scheduler_state_dict" in checkpoint
+        schedule_matches = checkpoint_schedule == self.config.lr_schedule
+        if self.scheduler:
+            if has_scheduler_state and schedule_matches:
+                self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                print(f"   Scheduler: '{self.config.lr_schedule}' state restored")
+            else:
+                reason = (
+                    f"schedule changed '{checkpoint_schedule}' → '{self.config.lr_schedule}'"
+                    if not schedule_matches
+                    else "no saved state in checkpoint"
+                )
+                print(
+                    f"   Scheduler: '{self.config.lr_schedule}' starting fresh ({reason})"
+                )
 
         # Restore GradScaler state if using AMP
         if "scaler_state_dict" in checkpoint and self.scaler:

@@ -55,10 +55,35 @@ def main():
     parser.add_argument("--use-rnn", action="store_true", help="Use RNN")
 
     # Training hyperparameters
-    parser.add_argument("--batch-size", type=int, default=256, help="Batch size")
-    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size (default: from RLTrainingConfig)")
+    parser.add_argument("--lr", type=float, default=None, help="Learning rate (default: from RLTrainingConfig)")
     parser.add_argument(
-        "--buffer-size", type=int, default=500000, help="Replay buffer size"
+        "--lr-schedule",
+        type=str,
+        default=None,
+        choices=["constant", "step", "cosine", "plateau"],
+        help="LR schedule: constant|step|cosine|plateau (default: from RLTrainingConfig)",
+    )
+    parser.add_argument(
+        "--lr-decay-steps",
+        type=int,
+        default=None,
+        help="StepLR: decay every N iters; Plateau: patience (default: from RLTrainingConfig)",
+    )
+    parser.add_argument(
+        "--lr-decay-gamma",
+        type=float,
+        default=None,
+        help="Multiplicative LR decay factor (default: from RLTrainingConfig)",
+    )
+    parser.add_argument(
+        "--lr-min",
+        type=float,
+        default=None,
+        help="Minimum LR floor for cosine/plateau (default: from RLTrainingConfig)",
+    )
+    parser.add_argument(
+        "--buffer-size", type=int, default=None, help="Replay buffer size (default: from RLTrainingConfig)"
     )
 
     # Evaluation
@@ -112,7 +137,9 @@ def main():
 
     args = parser.parse_args()
 
-    # Create configuration
+    # Start from RLTrainingConfig defaults, then apply only the CLI args that
+    # were explicitly provided (non-None).  This means rl_config.py is the
+    # authoritative source for any flag not passed on the command line.
     config = RLTrainingConfig(
         num_iterations=args.iterations,
         games_per_iteration=args.games_per_iter,
@@ -126,14 +153,19 @@ def main():
         num_workers=args.workers,
         cnn_blocks=args.cnn_blocks,
         use_rnn=args.use_rnn,
-        batch_size=args.batch_size,
-        learning_rate=args.lr,
-        buffer_size=args.buffer_size,
         eval_frequency=args.eval_freq,
         eval_games=args.eval_games,
         checkpoint_dir=args.checkpoint_dir,
         device="cpu" if args.cpu else "cuda",
         use_amp=not args.no_amp,
+        # Optional overrides — only applied when explicitly passed on CLI:
+        **({"batch_size": args.batch_size} if args.batch_size is not None else {}),
+        **({"learning_rate": args.lr} if args.lr is not None else {}),
+        **({"lr_schedule": args.lr_schedule} if args.lr_schedule is not None else {}),
+        **({"lr_decay_steps": args.lr_decay_steps} if args.lr_decay_steps is not None else {}),
+        **({"lr_decay_gamma": args.lr_decay_gamma} if args.lr_decay_gamma is not None else {}),
+        **({"lr_min": args.lr_min} if args.lr_min is not None else {}),
+        **({"buffer_size": args.buffer_size} if args.buffer_size is not None else {}),
     )
 
     # Create trainer

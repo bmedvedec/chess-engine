@@ -101,8 +101,9 @@ def _play_eval_game_worker(game_num: int) -> str:
     Lightweight per-game worker — MCTS instances already initialized by _init_eval_worker().
     Plays one evaluation game and returns the result string.
     """
-    assert _eval_current_mcts is not None and _eval_best_mcts is not None, \
-        "_init_eval_worker() was not called"
+    assert (
+        _eval_current_mcts is not None and _eval_best_mcts is not None
+    ), "_init_eval_worker() was not called"
     return play_evaluation_game(
         current_mcts=_eval_current_mcts,
         best_mcts=_eval_best_mcts,
@@ -116,6 +117,8 @@ def play_evaluation_game(
     best_mcts: MCTS,
     current_plays_white: bool,
     max_moves: int,
+    adjudicate_threshold: float = -0.6,
+    adjudicate_streak: int = 4,
 ) -> str:
     """
     Play single evaluation game between current and best models.
@@ -125,6 +128,11 @@ def play_evaluation_game(
         best_mcts: Pre-built MCTS for the best model (reused across games)
         current_plays_white: Whether current model plays white
         max_moves: Maximum moves before declaring draw
+        adjudicate_threshold: Root value below which a position is considered
+            losing for the side to move (default -0.6)
+        adjudicate_streak: Number of consecutive turns a model must evaluate
+            its own position below adjudicate_threshold before the game is
+            adjudicated as a loss for that model (default 4)
 
     Returns:
         "current_win", "best_win", or "draw"
@@ -133,30 +141,47 @@ def play_evaluation_game(
     board = chess.Board()
 
     move_count = 0
-    while not board.is_game_over() and move_count < max_moves:
-        if board.turn == chess.WHITE:
-            mcts = current_mcts if current_plays_white else best_mcts
-        else:
-            mcts = current_mcts if not current_plays_white else best_mcts
+    current_low_streak = 0
+    best_low_streak = 0
 
-        move, _ = mcts.search(board)
+    while not board.is_game_over() and move_count < max_moves:
+        is_current_turn = (board.turn == chess.WHITE) == current_plays_white
+        mcts = current_mcts if is_current_turn else best_mcts
+
+        move, stats = mcts.search(board)
 
         if move is None:
             break
 
+        if stats and "root_value" in stats:
+            root_val = stats["root_value"]
+            if is_current_turn:
+                current_low_streak = (
+                    current_low_streak + 1 if root_val < adjudicate_threshold else 0
+                )
+            else:
+                best_low_streak = (
+                    best_low_streak + 1 if root_val < adjudicate_threshold else 0
+                )
+
+            if current_low_streak >= adjudicate_streak:
+                return "best_win"  # current model concedes
+            if best_low_streak >= adjudicate_streak:
+                return "current_win"  # best model concedes
+
         board.push(move)
         move_count += 1
 
-    if board.is_checkmate():
-        white_won = not board.turn
-        if (white_won and current_plays_white) or (
-            not white_won and not current_plays_white
-        ):
-            return "current_win"
-        else:
-            return "best_win"
-    else:
-        return "draw"
+    # Classify terminal position via board.result() — covers checkmate,
+    # stalemate, 50-move rule, threefold repetition, and insufficient material.
+    if board.is_game_over(claim_draw=True):
+        result = board.result(claim_draw=True)
+        if result == "1-0":
+            return "current_win" if current_plays_white else "best_win"
+        elif result == "0-1":
+            return "best_win" if current_plays_white else "current_win"
+
+    return "draw"
 
 
 def execute_evaluation_step(
@@ -190,8 +215,10 @@ def execute_evaluation_step(
         Tuple of (eval_metrics, updated_best_model_flag, updated_best_iteration, updated_best_win_rate)
     """
     num_workers = config.num_workers or 1
-    print(f"\n⚔️  Evaluation: Playing {config.eval_games} games vs best model"
-          f" ({num_workers} worker{'s' if num_workers > 1 else ''})...")
+    print(
+        f"\n⚔️  Evaluation: Playing {config.eval_games} games vs best model"
+        f" ({num_workers} worker{'s' if num_workers > 1 else ''})..."
+    )
 
     current_model.eval()
     best_model.eval()
