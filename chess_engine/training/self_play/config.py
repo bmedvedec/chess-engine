@@ -15,7 +15,9 @@ DEFAULT_DIRICHLET_ALPHA = 0.5
 DEFAULT_DIRICHLET_EPSILON = 0.35
 DEFAULT_RESIGN_THRESHOLD = -0.45
 DEFAULT_VALUE_BLEND_ALPHA = 0.30
-DEFAULT_DRAW_VALUE_PENALTY = 0.75
+DEFAULT_DRAW_VALUE_PENALTY = 0.2
+DEFAULT_USE_RNN = True
+DEFAULT_RNN_MAX_HISTORY = 15
 
 
 @dataclass
@@ -27,8 +29,8 @@ class SelfPlayConfig:
     temperature: float = DEFAULT_TEMPERATURE
     temperature_threshold: int = DEFAULT_TEMPERATURE_THRESHOLD
     max_moves: int = DEFAULT_MAX_MOVES
-    use_rnn: bool = False
-    rnn_max_history: int = 15
+    use_rnn: bool = DEFAULT_USE_RNN
+    rnn_max_history: int = DEFAULT_RNN_MAX_HISTORY
     late_game_temperature: float = LATE_GAME_TEMPERATURE
     dirichlet_alpha: float = DEFAULT_DIRICHLET_ALPHA
     dirichlet_epsilon: float = DEFAULT_DIRICHLET_EPSILON
@@ -47,8 +49,8 @@ class SelfPlayConfig:
                 args, "temp_threshold", DEFAULT_TEMPERATURE_THRESHOLD
             ),
             max_moves=getattr(args, "max_moves", DEFAULT_MAX_MOVES),
-            use_rnn=getattr(args, "use_rnn", False),
-            rnn_max_history=getattr(args, "rnn_max_history", 15),
+            use_rnn=getattr(args, "use_rnn", DEFAULT_USE_RNN),
+            rnn_max_history=getattr(args, "rnn_max_history", DEFAULT_RNN_MAX_HISTORY),
             dirichlet_alpha=getattr(args, "dirichlet_alpha", DEFAULT_DIRICHLET_ALPHA),
             dirichlet_epsilon=getattr(
                 args, "dirichlet_epsilon", DEFAULT_DIRICHLET_EPSILON

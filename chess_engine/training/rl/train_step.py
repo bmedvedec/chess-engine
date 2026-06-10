@@ -111,8 +111,8 @@ def execute_training_step(
         # receive more gradient updates.  IS weights correct the resulting bias.
         pbar = tqdm(total=config.training_steps_per_iteration, desc="Training (PER)")
 
-        last_indices: List[int] = []
-        last_priorities: List[float] = []
+        all_indices: List[int] = []
+        all_priorities: List[float] = []
 
         for _step in range(config.training_steps_per_iteration):
             # sample() on PrioritizedReplayBuffer returns boards as chess.Board
@@ -212,8 +212,8 @@ def execute_training_step(
                 td_errors = (value_pred.squeeze(1) - values.squeeze(1)).abs()
                 new_priorities = (td_errors + config.per_epsilon).cpu().tolist()
 
-            last_indices = batch["indices"]
-            last_priorities = new_priorities
+            all_indices.extend(batch["indices"])
+            all_priorities.extend(new_priorities)
 
             # --- accumulate metrics ---
             total_loss += loss.item()
@@ -251,14 +251,14 @@ def execute_training_step(
             pbar.update(1)
 
         pbar.close()
-        per_update = {"indices": last_indices, "priorities": last_priorities}
+        per_update = {"indices": all_indices, "priorities": all_priorities}
 
     # =========================================================================
     # UNIFORM TRAINING PATH  (original DataLoader-based approach)
     # =========================================================================
     else:
         # Sample from replay buffer - get all examples
-        buffer_examples = list(replay_buffer.buffer)
+        buffer_examples = replay_buffer.get_all()
 
         # Determine sample size
         sample_size = min(

@@ -315,7 +315,6 @@ class RLTrainer:
                 print(f"{'='*80}")
 
                 # Step 1: Self-play
-                selfplay_start = time.time()
                 _, self.total_games_played, selfplay_stats, selfplay_seconds = (
                     execute_self_play_step(
                         model=self.model,
@@ -384,7 +383,7 @@ class RLTrainer:
                         f"\n⏳ Buffer size ({len(self.replay_buffer)}) below minimum "
                         f"({self.config.min_buffer_size}). Skipping training."
                     )
-                    train_metrics = {"loss": 0.0, "policy_loss": 0.0, "value_loss": 0.0}
+                    train_metrics = {"loss": 0.0, "policy_loss": 0.0, "value_loss": 0.0, "skipped": True}
                 train_seconds = time.time() - train_start
 
                 # Step 3: Evaluation
@@ -415,11 +414,12 @@ class RLTrainer:
                         )
 
                 # Step 4: Learning rate schedule (before logging so CSV captures new LR)
-                if self.scheduler:
+                if self.scheduler and not train_metrics.get("skipped", False):
                     lr_before = self.optimizer.param_groups[0]["lr"]
                     if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                        # ReduceLROnPlateau monitors a metric — use training loss.
-                        # Falls back to 0.0 when training was skipped (small buffer).
+                        # ReduceLROnPlateau monitors training loss. Skip when training
+                        # was skipped (buffer too small) — passing 0.0 looks like
+                        # perfect performance and silently extends patience.
                         self.scheduler.step(train_metrics.get("loss", 0.0))
                     else:
                         self.scheduler.step()
@@ -570,10 +570,9 @@ class RLTrainer:
         for checkpoint in checkpoints[self.config.keep_checkpoints :]:
             checkpoint.unlink()
             # Also remove corresponding buffer
-            buffer_file = (
-                checkpoint.parent
-                / f"buffer_iteration_{checkpoint.stem.split('_')[-1]}.pkl"
-            )
+            # Derive buffer filename from checkpoint stem directly — avoids
+            # fragile split('_')[-1] if stem ever contains a non-integer suffix.
+            buffer_file = checkpoint.parent / f"buffer_{checkpoint.stem}.pkl"
             if buffer_file.exists():
                 buffer_file.unlink()
 
@@ -583,17 +582,28 @@ class RLTrainer:
 
         checkpoint = torch.load(filepath, map_location=self.device)
 
-        # Restore model state
-        self.model.load_state_dict(checkpoint["model_state_dict"])
-        self.best_model.load_state_dict(checkpoint["best_model_state_dict"])
-        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        def _load(model, state_dict):
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            if missing:
+                print(f"   ⚠  New keys (randomly initialised): {missing}")
+            if unexpected:
+                print(f"   ⚠  Dropped keys (not in model):    {unexpected}")
 
-        actual_ckpt_lr = self.optimizer.param_groups[0]["lr"]
-        for pg in self.optimizer.param_groups:
-            pg["lr"] = self.config.learning_rate
-        if actual_ckpt_lr != self.config.learning_rate:
+        _load(self.model, checkpoint["model_state_dict"])
+        _load(self.best_model, checkpoint["best_model_state_dict"])
+        try:
+            self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            actual_ckpt_lr = self.optimizer.param_groups[0]["lr"]
+            for pg in self.optimizer.param_groups:
+                pg["lr"] = self.config.learning_rate
+            if actual_ckpt_lr != self.config.learning_rate:
+                print(
+                    f"   LR overridden: {actual_ckpt_lr} → {self.config.learning_rate} (from config)"
+                )
+        except (ValueError, KeyError, RuntimeError) as e:
             print(
-                f"   LR overridden: {actual_ckpt_lr} → {self.config.learning_rate} (from config)"
+                f"   ⚠  Optimizer state incompatible (architecture changed?): {e}\n"
+                f"   ⚠  Reinitialising optimizer from scratch at lr={self.config.learning_rate}"
             )
         else:
             print(f"   LR: {self.config.learning_rate} (unchanged)")

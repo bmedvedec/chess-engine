@@ -44,6 +44,9 @@ def add_dirichlet_noise(
 def select_move(
     root: MCTSNode,
     move_number: int = 0,
+    temperature: float = 1.0,
+    temperature_threshold: int = 30,
+    late_game_temperature: float = 0.1,
 ) -> chess.Move:
     """
     Select move based on visit counts with temperature scheduling.
@@ -51,6 +54,9 @@ def select_move(
     Args:
         root: Root node after search
         move_number: Current move number (for temperature scheduling)
+        temperature: Exploration temperature for early game (default: 1.0)
+        temperature_threshold: Move number to switch to late-game temperature (default: 30)
+        late_game_temperature: Exploitation temperature for late game (default: 0.1)
 
     Returns:
         Best move
@@ -63,11 +69,11 @@ def select_move(
         legal_moves = list(root.board.legal_moves)
         return legal_moves[np.random.randint(len(legal_moves))]
 
-    # Temperature scheduling: high early game, low late game
-    if move_number < 30:
-        temperature = 1.0  # More exploration
+    # Temperature scheduling driven by config values
+    if move_number < temperature_threshold:
+        temperature = temperature   # early game: exploration
     else:
-        temperature = 0.1  # More exploitation
+        temperature = late_game_temperature  # late game: exploitation
 
     if temperature < 0.01:
         # Deterministic - select highest visit count

@@ -112,10 +112,14 @@ class ReplayBuffer:
             "fen": example.fen,
             "policy": example.policy,
             "value": example.value,
-            "move_history": [],
+            "move_history": example.move_history,
             "move_number": example.move_number,
         }
         self.buffer.append(internal_example)
+
+    def get_all(self) -> List[dict]:
+        """Return a snapshot of all examples currently in the buffer."""
+        return list(self.buffer)
 
     def add_game_examples(self, examples: List[GameExample]) -> None:
         """

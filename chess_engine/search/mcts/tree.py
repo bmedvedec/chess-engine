@@ -68,9 +68,16 @@ def get_search_stats(root: MCTSNode, cache_size: int = 0) -> Dict:
     Returns:
         Dictionary of statistics
     """
+    # Full visit counts over ALL children — used by extract_policy() to build
+    # accurate policy targets. Must cover every legal move, not just top-N.
+    visit_counts = {
+        move.uci(): child.visit_count for move, child in root.children.items()
+    }
+
     stats = {
         "total_visits": root.visit_count,
         "root_value": root.value(),
+        "visit_counts": visit_counts,
         "top_moves": [],
         "cache_size": cache_size,
         "num_children": len(root.children),
@@ -81,7 +88,7 @@ def get_search_stats(root: MCTSNode, cache_size: int = 0) -> Dict:
         root.children.items(), key=lambda x: x[1].visit_count, reverse=True
     )
 
-    # Get top 5 moves
+    # Get top 5 moves (kept for logging/debugging purposes)
     for move, child in sorted_children[:5]:
         stats["top_moves"].append(
             {

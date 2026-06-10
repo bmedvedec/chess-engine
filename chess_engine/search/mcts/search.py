@@ -47,10 +47,12 @@ class MCTS:
         num_simulations: int = 100,
         c_puct: float = 1.5,
         temperature: float = 1.0,
+        temperature_threshold: int = 30,
+        late_game_temperature: float = 0.1,
         use_rnn: bool = False,
         # Caching
         enable_caching: bool = True,
-        max_cache_size: int = 10000,
+        max_cache_size: int = 100000,
         # Batch evaluation
         eval_batch_size: int = 16,
         # Progressive widening
@@ -92,6 +94,8 @@ class MCTS:
         self.num_simulations = num_simulations
         self.c_puct = c_puct
         self.temperature = temperature
+        self.temperature_threshold = temperature_threshold
+        self.late_game_temperature = late_game_temperature
         self.use_progressive_widening = use_progressive_widening
         self.enable_early_termination = enable_early_termination
         self.early_termination_threshold = early_termination_threshold
@@ -141,9 +145,10 @@ class MCTS:
         # Evaluate root to get initial policy
         policy_probs, root_value = self.evaluator.evaluate_position(root.board)
 
-        # Initialize root node with its value (improves initial estimates)
-        root.visit_count = 1
-        root.value_sum = root_value
+        # Do NOT seed visit_count/value_sum here. Seeding with count=1 causes the
+        # NN's raw estimate to be double-counted — once as the seed and again when
+        # the first simulation backpropagates through the root. AlphaZero counts
+        # only real simulations; root.value() will be purely simulation-derived.
 
         # Add Dirichlet noise if enabled (for training exploration)
         if self.dirichlet_epsilon > 0:
@@ -185,7 +190,12 @@ class MCTS:
 
         # Select best move based on visit counts
         move_number = len(board.move_stack)
-        best_move = select_move(root, move_number)
+        best_move = select_move(
+            root, move_number,
+            temperature=self.temperature,
+            temperature_threshold=self.temperature_threshold,
+            late_game_temperature=self.late_game_temperature,
+        )
 
         # Gather statistics if requested
         stats = None
@@ -215,9 +225,7 @@ class MCTS:
         # Initial evaluation
         policy_probs, root_value = self.evaluator.evaluate_position(root.board)
 
-        # Initialize root node with its value (improves initial estimates)
-        root.visit_count = 1
-        root.value_sum = root_value
+        # Do NOT seed visit_count/value_sum here — same reason as search().
 
         if self.dirichlet_epsilon > 0:
             policy_probs = add_dirichlet_noise(
@@ -236,32 +244,47 @@ class MCTS:
             # Collect leaf nodes for this batch
             batch_nodes = []
             batch_paths = []
+            visited_leaves: set = set()  # guard against evaluating the same leaf twice
 
             for _ in range(batch_size):
                 node = root
                 search_path = [node]
+                node.add_virtual_loss()
 
-                # Selection
+                # Selection — virtual loss on each visited node steers subsequent
+                # paths in this batch away from the same branch.
                 while not node.is_leaf():
                     node = node.select_child(self.c_puct)
                     search_path.append(node)
+                    node.add_virtual_loss()
 
-                if not node.board.is_game_over():
-                    batch_nodes.append(node)
-                    batch_paths.append(search_path)
-                else:
-                    # Terminal node - backpropagate immediately
+                if node.board.is_game_over():
+                    # Terminal node — undo virtual loss, backpropagate immediately
+                    for n in search_path:
+                        n.remove_virtual_loss()
                     value = Evaluator.get_game_result(node.board)
                     backpropagate(search_path, value)
+                elif id(node) in visited_leaves:
+                    # Duplicate leaf within this batch (can occur in positions with
+                    # few legal moves even with virtual loss). Undo virtual loss and
+                    # skip — the first occurrence will expand and backpropagate it.
+                    for n in search_path:
+                        n.remove_virtual_loss()
+                else:
+                    visited_leaves.add(id(node))
+                    batch_nodes.append(node)
+                    batch_paths.append(search_path)
 
             # Batch evaluate all leaf nodes
             if batch_nodes:
                 policies, values = self.evaluator.evaluate_positions_batch(batch_nodes)
 
-                # Expand and backpropagate
+                # Remove virtual loss, expand, backpropagate
                 for node, policy_probs, value, search_path in zip(
                     batch_nodes, policies, values, batch_paths
                 ):
+                    for n in search_path:
+                        n.remove_virtual_loss()
                     node.expand(policy_probs, progressive=self.use_progressive_widening)
                     backpropagate(search_path, value)
 
@@ -279,7 +302,12 @@ class MCTS:
                     break
 
         move_number = len(board.move_stack)
-        best_move = select_move(root, move_number)
+        best_move = select_move(
+            root, move_number,
+            temperature=self.temperature,
+            temperature_threshold=self.temperature_threshold,
+            late_game_temperature=self.late_game_temperature,
+        )
 
         stats = None
         if return_stats:
@@ -371,7 +399,13 @@ class MCTS:
             simulations_done += 1
 
         # Select best move based on visit counts
-        best_move = select_move(root)
+        move_number = len(board.move_stack)
+        best_move = select_move(
+            root, move_number,
+            temperature=self.temperature,
+            temperature_threshold=self.temperature_threshold,
+            late_game_temperature=self.late_game_temperature,
+        )
 
         # Gather statistics if requested
         stats = None

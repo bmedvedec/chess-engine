@@ -37,6 +37,9 @@ def _init_worker(model_path: str, config_dict: dict) -> None:
 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
+    # Workers share the GPU for inference. Self-play and training are sequential
+    # (self-play completes before the training step begins), so there is no GPU
+    # contention between workers and the trainer. CPU was ~3× slower in practice.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     _worker_device = device
 

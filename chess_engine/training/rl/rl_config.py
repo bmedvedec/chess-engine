@@ -48,14 +48,25 @@ class RLTrainingConfig:
     max_moves_per_game: int = 150  # shorter games force more decisive outcomes
     dirichlet_alpha: float = 0.5
     dirichlet_epsilon: float = 0.35  # weight of noise at root
-    # Resign threshold: fire when raw MCTS root_value < this for 4 consecutive moves.
-    # CALIBRATION NOTE: raw MCTS values depend on what the value head has learned.
-    resign_threshold: float = -0.45
+    resign_threshold: float = -0.75
 
     # Value target blending: mix MCTS root value with game outcome after each game.
-    # Prevents the draw-collapse loop where MCTS estimates ~0 and the network learns ~0.
-    value_blend_alpha: float = 0.30
-    draw_value_penalty: float = 0.75
+    # target = alpha * mcts_value + (1 - alpha) * game_outcome
+    #
+    # With alpha=0.30 and 75% draws (game_outcome=0), game outcomes get 70% weight
+    # but 75% of them are 0. This compresses draw-position targets to ~0.30*mcts_val,
+    # discarding most of the MCTS signal. The model collapses to predicting a constant
+    # and value_correlation decays. std_mcts=0.40 shows MCTS IS generating varied
+    # position evaluations — alpha must be high enough to preserve that signal.
+    #
+    # alpha=0.70: draw targets = 0.70*mcts_val (varied, std≈0.28) — model must
+    # differentiate positions. Game outcome (30%) corrects systematic MCTS bias.
+    # Reduce alpha toward 0.30 once resign_pct>10% and draw_pct<50%.
+    value_blend_alpha: float = 0.70
+    # Draw penalty: applied as game_val = -draw_value_penalty for drawn games.
+    # Keep at 0.0 while draws dominate (>70%). Increase toward 0.3 once
+    # resign_pct > 10% and draw rates drop below 50%.
+    draw_value_penalty: float = 0.2
 
     # =====================
     # Parallel self-play
@@ -86,7 +97,12 @@ class RLTrainingConfig:
     learning_rate: float = 0.001
     weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
-    value_loss_weight: float = 2.0
+    # Value head gets <1% of gradient at weight=2.0 because value_loss (~0.001)
+    # is 300x smaller than policy_loss (~0.27) at convergence. L2 regularization
+    # then slowly compresses value head weights → std_pred collapses → MCTS
+    # gets ~0 for all positions → eval win rate degrades. Weight=15 gives ~5%
+    # gradient to value head, enough to resist compression without destabilising policy.
+    value_loss_weight: float = 15.0
 
     # =====================
     # Optimizer settings

@@ -15,8 +15,6 @@ from tqdm import tqdm
 
 from chess_engine.utils.board_encoder import BoardEncoder
 from chess_engine.utils.move_encoder import MoveEncoder
-from chess_engine.search.mcts.evaluator import Evaluator
-from chess_engine.search.mcts.cache import PositionCache
 from chess_engine.search.mcts.search import MCTS
 from chess_engine.data.replay.buffer import ReplayBuffer
 from chess_engine.data.replay.storage import GameExample
@@ -59,18 +57,7 @@ class SelfPlayGameRunner:
         self.board_encoder = BoardEncoder()
         self.move_encoder = MoveEncoder()
 
-        # Evaluator (NN + exploration logic)
-        self.evaluator = Evaluator(
-            model=self.model,
-            board_encoder=self.board_encoder,
-            move_encoder=self.move_encoder,
-            device=self.device,
-            use_rnn=self.config.use_rnn,
-            temperature=self.config.temperature,
-            cache=PositionCache(max_size=100_000),
-        )
-
-        # MCTS (pure search)
+        # MCTS (pure search) — owns the evaluator and position cache internally
         self.mcts = MCTS(
             model=self.model,
             board_encoder=self.board_encoder,
@@ -78,6 +65,9 @@ class SelfPlayGameRunner:
             device=self.device,
             num_simulations=self.config.num_simulations,
             c_puct=self.config.c_puct,
+            temperature=self.config.temperature,
+            temperature_threshold=self.config.temperature_threshold,
+            late_game_temperature=self.config.late_game_temperature,
             dirichlet_epsilon=self.config.dirichlet_epsilon,
             dirichlet_alpha=self.config.dirichlet_alpha,
             use_rnn=self.config.use_rnn,
@@ -103,8 +93,9 @@ class SelfPlayGameRunner:
         board = chess.Board()
         examples = []
         move_count = 0
+        move_history: List[str] = []  # UCI moves played so far, for RNN input
         resigned = False
-        resign_streak = 0
+        resign_streak = {chess.WHITE: 0, chess.BLACK: 0}
         _RESIGN_STREAK_REQUIRED = 4
 
         if verbose:
@@ -120,7 +111,7 @@ class SelfPlayGameRunner:
                 else:
                     temp = self.config.late_game_temperature
 
-                self.evaluator.temperature = temp
+                self.mcts.evaluator.temperature = temp
 
                 try:
                     # Run MCTS (batched: fewer GPU round-trips than search())
@@ -130,14 +121,15 @@ class SelfPlayGameRunner:
                         raise ValueError(f"MCTS returned illegal move: {move}")
 
                     if move_count > 10:
+                        side = board.turn
                         if should_resign(stats, self.config.resign_threshold):
-                            resign_streak += 1
+                            resign_streak[side] += 1
                         else:
-                            resign_streak = 0
+                            resign_streak[side] = 0
 
-                        if resign_streak >= _RESIGN_STREAK_REQUIRED:
+                        if resign_streak[side] >= _RESIGN_STREAK_REQUIRED:
                             resigned = True
-                            result = "0-1" if board.turn == chess.WHITE else "1-0"
+                            result = "0-1" if side == chess.WHITE else "1-0"
                             if verbose:
                                 root_val = stats.get("root_value", float("nan"))
                                 print(
@@ -154,18 +146,20 @@ class SelfPlayGameRunner:
                     mcts_root_value = stats.get("root_value", 0.0) if stats else 0.0
                     mcts_root_value = max(-1.0, min(1.0, mcts_root_value))
 
-                    # Store example
+                    # Store example — snapshot history before this move is pushed
                     example = GameExample(
                         fen=board.fen(),
                         policy=policy,
                         value=mcts_root_value,
                         move_number=move_count,
+                        move_history=list(move_history),
                     )
                     examples.append(example)
 
                     if verbose and move_count % 10 == 0:
                         print(f"   Move {move_count}: {move.uci()}")
 
+                    move_history.append(move.uci())
                     board.push(move)
 
                 except Exception as e:

@@ -33,12 +33,12 @@ def main():
     )
 
     # Self-play parameters
-    parser.add_argument("--simulations", type=int, default=200, help="MCTS simulations")
+    parser.add_argument("--simulations", type=int, default=None, help="MCTS simulations (default: from RLTrainingConfig)")
     parser.add_argument(
         "--c-puct",
         type=float,
-        default=2.0,
-        help="MCTS exploration constant (default: 2.0)",
+        default=None,
+        help="MCTS exploration constant (default: from RLTrainingConfig)",
     )
     parser.add_argument(
         "--parallel",
@@ -100,15 +100,15 @@ def main():
     parser.add_argument(
         "--dirichlet-alpha",
         type=float,
-        default=0.3,
-        help="Dirichlet noise alpha for root exploration (default: 0.3)",
+        default=None,
+        help="Dirichlet noise alpha for root exploration (default: from RLTrainingConfig)",
     )
 
     parser.add_argument(
         "--resign-threshold",
         type=float,
-        default=-0.9,
-        help="Resign if position value drops below this (default: -0.9)",
+        default=None,
+        help="Resign if MCTS root value drops below this for 4 consecutive own-side moves (default: from RLTrainingConfig)",
     )
 
     # Checkpointing
@@ -144,12 +144,13 @@ def main():
         num_iterations=args.iterations,
         games_per_iteration=args.games_per_iter,
         training_steps_per_iteration=args.training_steps,
-        num_simulations=args.simulations,
-        c_puct=getattr(args, "c_puct", 2.0),
         temperature=args.temperature,
-        dirichlet_alpha=args.dirichlet_alpha,
-        resign_threshold=args.resign_threshold,
         use_parallel_selfplay=args.parallel,
+        # None-guarded: only override rl_config.py when explicitly passed on CLI
+        **({"num_simulations": args.simulations} if args.simulations is not None else {}),
+        **({"c_puct": args.c_puct} if args.c_puct is not None else {}),
+        **({"dirichlet_alpha": args.dirichlet_alpha} if args.dirichlet_alpha is not None else {}),
+        **({"resign_threshold": args.resign_threshold} if args.resign_threshold is not None else {}),
         num_workers=args.workers,
         cnn_blocks=args.cnn_blocks,
         use_rnn=args.use_rnn,

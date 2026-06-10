@@ -148,7 +148,7 @@ def play_evaluation_game(
         is_current_turn = (board.turn == chess.WHITE) == current_plays_white
         mcts = current_mcts if is_current_turn else best_mcts
 
-        move, stats = mcts.search(board)
+        move, stats = mcts.search_batched(board, return_stats=True)
 
         if move is None:
             break
@@ -233,8 +233,8 @@ def execute_evaluation_step(
         current_tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
         best_tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
         try:
-            torch.save(current_model.state_dict(), current_tmp.name)
-            torch.save(best_model.state_dict(), best_tmp.name)
+            torch.save({"model_state_dict": current_model.state_dict()}, current_tmp.name)
+            torch.save({"model_state_dict": best_model.state_dict()}, best_tmp.name)
             current_tmp.close()
             best_tmp.close()
 
@@ -361,16 +361,8 @@ def execute_evaluation_step(
         )
     else:
         print(
-            f"\n   Current model not better than best (need {config.win_threshold:.1%})"
+            f"\n   Current model not better than best (win rate {win_rate:.1%} below threshold {config.win_threshold:.1%})"
         )
-
-        if win_rate > best_win_rate:
-            print(
-                f"   However, this is better than previous best ({best_win_rate:.1%})"
-            )
-            should_update_best = True
-            updated_best_iteration = current_iteration
-            updated_best_win_rate = win_rate
 
     # Log to tensorboard
     writer.add_scalar("eval/win_rate", win_rate, current_iteration)

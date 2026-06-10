@@ -4,7 +4,7 @@ REPLAY BUFFER - Data Types & Storage
 Provides data types and conversion utilities for replay buffer storage.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List
 
 import chess
@@ -23,6 +23,7 @@ class GameExample:
     policy: Dict[str, float]  # UCI string -> probability
     value: float
     move_number: int
+    move_history: List[str] = field(default_factory=list)  # UCI moves leading to this position
 
 
 def convert_policy_dict_to_tensor(
