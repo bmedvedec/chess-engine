@@ -40,15 +40,18 @@ class RLTrainingConfig:
     # =====================
     # Self-play configuration
     # =====================
-    num_simulations: int = 100
+    num_simulations: int = 200
     c_puct: float = 1.5
-    temperature: float = 1.5
-    temperature_threshold: int = 50
-    late_game_temperature: float = 0.3
-    max_moves_per_game: int = 150  # shorter games force more decisive outcomes
+    temperature: float = 1.0
+    temperature_threshold: int = 30
+    late_game_temperature: float = 0.1
+    max_moves_per_game: int = 100  # shorter games force more decisive outcomes
     dirichlet_alpha: float = 0.5
     dirichlet_epsilon: float = 0.35  # weight of noise at root
-    resign_threshold: float = -0.75
+    resign_threshold: float = -0.30
+    random_opening_moves: int = (
+        6  # random moves before MCTS takes over — breaks color-specific opening patterns
+    )
 
     # Value target blending: mix MCTS root value with game outcome after each game.
     # target = alpha * mcts_value + (1 - alpha) * game_outcome
@@ -66,7 +69,7 @@ class RLTrainingConfig:
     # Draw penalty: applied as game_val = -draw_value_penalty for drawn games.
     # Keep at 0.0 while draws dominate (>70%). Increase toward 0.3 once
     # resign_pct > 10% and draw rates drop below 50%.
-    draw_value_penalty: float = 0.2
+    draw_value_penalty: float = 0.60
 
     # =====================
     # Parallel self-play
@@ -83,8 +86,8 @@ class RLTrainingConfig:
     use_rnn: bool = True
     rnn_hidden_size: int = 256
     rnn_layers: int = 2
-    rnn_use_attention: bool = False
-    rnn_bidirectional: bool = False
+    rnn_use_attention: bool = True
+    rnn_bidirectional: bool = True
     rnn_max_history: int = 15  # Max move history length fed to LSTM (shorter = faster)
 
     fusion_type: Literal["concat", "gated", "attention"] = "gated"
@@ -176,15 +179,21 @@ class RLTrainingConfig:
     # With 50 games, the standard error on win rate drops to ~7%, making improvements
     # above the win_threshold reliably detectable. Increase to 100 for more confidence.
     eval_games: int = 50
-    eval_simulations: int = 100
+    eval_simulations: int = 50
+    eval_max_moves: int = 50
+    # Separate worker count for parallel evaluation. Each worker loads 2 model
+    # copies (current + best) onto the GPU. 4 workers = 8 model copies — safe
+    # on any GPU that handles 12 self-play workers (which each load 1 copy).
+    # Set to None to run evaluation sequentially.
+    eval_workers: Optional[int] = 4
     win_threshold: float = 0.55
 
     # =====================
     # Checkpointing
     # =====================
     checkpoint_dir: str = "data/rl_checkpoints"
-    save_frequency: int = 1
-    keep_checkpoints: int = 20
+    save_frequency: int = 5
+    keep_checkpoints: int = 1000
 
     # =====================
     # Logging

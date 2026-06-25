@@ -16,7 +16,7 @@ latest self-play iteration need encoding — typically ~0.02% of the buffer.
 """
 
 import itertools
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Sequence, Tuple, Union
 
 import chess
 import torch
@@ -25,7 +25,6 @@ from torch.utils.data import Dataset
 from chess_engine.utils.board_encoder import BoardEncoder
 from chess_engine.utils.move_encoder import MoveEncoder
 from chess_engine.data.replay.storage import GameExample
-
 
 # ---------------------------------------------------------------------------
 # Module-level caches — persist across training calls for the process lifetime.
@@ -94,13 +93,15 @@ class RLDataset(Dataset):
 
     def __init__(
         self,
-        examples: List[GameExample],
+        examples: Sequence[Union[GameExample, Dict[str, Any]]],
         board_encoder: BoardEncoder,
         move_encoder: MoveEncoder,
+        rnn_max_history: int = 15,
     ):
         global _board_tensor_cache, _policy_sparse_cache, _cache_sweep_counter
 
         self._num_moves = move_encoder.num_moves
+        self._rnn_max_history = rnn_max_history
 
         # -------------------------------------------------------------------
         # Periodic zombie sweep — remove cache entries for FENs that have
@@ -115,6 +116,8 @@ class RLDataset(Dataset):
 
         self._board_refs: List[torch.Tensor] = []
         self._policy_sparse: List[Tuple[List[int], List[float]]] = []
+        self._history_tensors: List[torch.Tensor] = []
+        self._history_lengths: List[int] = []
         value_list: List[float] = []
 
         for example in examples:
@@ -122,10 +125,12 @@ class RLDataset(Dataset):
                 fen = example["fen"]
                 policy_dict = example["policy"]
                 value_target = example["value"]
+                raw_history: List[str] = example.get("move_history", [])
             else:
                 fen = example.fen
                 policy_dict = example.policy
                 value_target = example.value
+                raw_history = example.move_history or []
 
             if fen not in _board_tensor_cache:
                 _board_tensor_cache[fen] = board_encoder.board_to_tensor(
@@ -153,6 +158,18 @@ class RLDataset(Dataset):
 
             self._policy_sparse.append(_policy_sparse_cache[policy_key])
 
+            # Encode move history to padded index tensor (not cached — histories
+            # are unique per example even for the same FEN position)
+            hist = torch.zeros(rnn_max_history, dtype=torch.long)
+            length = max(1, min(len(raw_history), rnn_max_history))
+            for i, uci in enumerate(raw_history[:length]):
+                try:
+                    hist[i] = move_encoder.encode_move(chess.Move.from_uci(uci))
+                except Exception:
+                    pass
+            self._history_tensors.append(hist)
+            self._history_lengths.append(length)
+
             value_list.append(float(value_target))
 
         self.values = torch.tensor(value_list, dtype=torch.float32).unsqueeze(1)
@@ -160,7 +177,9 @@ class RLDataset(Dataset):
     def __len__(self) -> int:
         return len(self._board_refs)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(
+        self, idx: int
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         board = self._board_refs[idx]
 
         idxs, probs = self._policy_sparse[idx]
@@ -171,4 +190,10 @@ class RLDataset(Dataset):
             if policy_sum > 0:
                 policy = policy / policy_sum
 
-        return board, policy, self.values[idx]
+        return (
+            board,
+            policy,
+            self.values[idx],
+            self._history_tensors[idx],
+            torch.tensor(self._history_lengths[idx], dtype=torch.long),
+        )

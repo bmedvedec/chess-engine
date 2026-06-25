@@ -59,6 +59,7 @@ def execute_self_play_step(
         resign_threshold=config.resign_threshold,
         value_blend_alpha=config.value_blend_alpha,
         draw_value_penalty=config.draw_value_penalty,
+        random_opening_moves=config.random_opening_moves,
     )
 
     # Generate games

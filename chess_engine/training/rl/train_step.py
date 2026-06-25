@@ -14,7 +14,7 @@ priorities from the TD-error, and returns them so the trainer can push them
 back into the buffer.
 """
 
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Tuple, Union
 
 import chess
 import numpy as np
@@ -34,6 +34,53 @@ from chess_engine.data.replay.buffer import ReplayBuffer
 from chess_engine.data.replay.prioritized import PrioritizedReplayBuffer
 
 AMP_DEVICE = "cuda"
+
+
+def _encode_move_histories(
+    move_histories: List[List[chess.Move]],
+    move_encoder: MoveEncoder,
+    max_history: int,
+    device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Encode a batch of move history lists into padded index tensors.
+
+    Args:
+        move_histories: List of move lists (chess.Move objects or UCI strings).
+        move_encoder: Encodes moves to integer indices.
+        max_history: Pad/truncate each history to this length.
+        device: Target device for output tensors.
+
+    Returns:
+        Tuple of (histories, lengths):
+            histories — LongTensor of shape (batch, max_history)
+            lengths   — LongTensor of shape (batch,) with actual sequence lengths
+    """
+    tensors = []
+    lengths = []
+    for moves in move_histories:
+        t = torch.zeros(max_history, dtype=torch.long)
+        length = max(1, min(len(moves), max_history))
+        for i, move in enumerate(moves[:length]):
+            try:
+                if isinstance(move, str):
+                    move = chess.Move.from_uci(move)
+                t[i] = move_encoder.encode_move(move)
+            except Exception:
+                pass
+        tensors.append(t)
+        lengths.append(length)
+    return (
+        torch.stack(tensors).to(device),
+        torch.tensor(lengths, dtype=torch.long).to(device),
+    )
+
+
+def _read_gate_mean(model: nn.Module) -> Optional[float]:
+    """Return last_gate_mean from model.fusion if available, else None."""
+    fusion = getattr(model, "fusion", None)
+    if fusion is None:
+        return None
+    return fusion.last_gate_mean
 
 
 def execute_training_step(
@@ -92,6 +139,10 @@ def execute_training_step(
     mcts_root_values: List[float] = []
     predicted_values: List[float] = []
 
+    # Fusion gate mean — tracks CNN vs RNN contribution per training step.
+    # Only populated when model uses gated fusion (model.fusion.last_gate_mean).
+    gate_values: List[float] = []
+
     # Will be populated by the PER path; None signals uniform replay was used.
     per_update = None
 
@@ -122,6 +173,11 @@ def execute_training_step(
             # --- encode boards ---
             board_tensors = [board_encoder.board_to_tensor(b) for b in batch["boards"]]
             boards = torch.stack(board_tensors).to(device)
+
+            # --- encode move histories ---
+            move_histories_t, hist_lengths_t = _encode_move_histories(
+                batch["move_histories"], move_encoder, config.rnn_max_history, device
+            )
 
             # --- encode policies (dict or pre-encoded tensor) ---
             policy_tensors = []
@@ -158,7 +214,9 @@ def execute_training_step(
                     scaler is not None
                 ), "Scaler must be initialised when use_amp is True"
                 with autocast(device_type=AMP_DEVICE):
-                    policy_logits, value_pred, _ = model(boards)
+                    policy_logits, value_pred, _ = model(
+                        boards, move_histories_t, hist_lengths_t
+                    )
 
                     policies_safe = policies + 1e-8
                     policies_safe = policies_safe / policies_safe.sum(
@@ -187,7 +245,9 @@ def execute_training_step(
 
             else:
                 # STANDARD FP32 PATH
-                policy_logits, value_pred, _ = model(boards)
+                policy_logits, value_pred, _ = model(
+                    boards, move_histories_t, hist_lengths_t
+                )
 
                 policies_safe = policies + 1e-8
                 policies_safe = policies_safe / policies_safe.sum(dim=1, keepdim=True)
@@ -206,6 +266,11 @@ def execute_training_step(
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
+
+            # Accumulate fusion gate mean (gated fusion only; None otherwise)
+            gm = _read_gate_mean(model)
+            if gm is not None:
+                gate_values.append(gm)
 
             # Compute new priorities: |TD-error| + epsilon so nothing hits zero
             with torch.no_grad():
@@ -258,7 +323,7 @@ def execute_training_step(
     # =========================================================================
     else:
         # Sample from replay buffer - get all examples
-        buffer_examples = replay_buffer.get_all()
+        buffer_examples: List[Any] = replay_buffer.get_all()
 
         # Determine sample size
         sample_size = min(
@@ -270,8 +335,13 @@ def execute_training_step(
             indices = np.random.choice(len(buffer_examples), sample_size, replace=False)
             buffer_examples = [buffer_examples[i] for i in indices]
 
-        # Create dataset and dataloader
-        dataset = RLDataset(buffer_examples, board_encoder, move_encoder)
+        # Create dataset and dataloader — move history encoded once here, not per step
+        dataset = RLDataset(
+            buffer_examples,
+            board_encoder,
+            move_encoder,
+            rnn_max_history=config.rnn_max_history,
+        )
         dataloader = DataLoader(
             dataset,
             batch_size=config.batch_size,
@@ -288,11 +358,13 @@ def execute_training_step(
         pbar = tqdm(total=config.training_steps_per_iteration, desc="Training")
 
         for epoch in range(num_epochs):
-            for boards, policies, values in dataloader:
+            for boards, policies, values, move_histories, history_lengths in dataloader:
                 # Move to device
                 boards = boards.to(device)
                 policies = policies.to(device)
                 values = values.to(device)
+                move_histories = move_histories.to(device)
+                history_lengths = history_lengths.to(device)
 
                 # Zero gradients
                 optimizer.zero_grad()
@@ -307,8 +379,9 @@ def execute_training_step(
                     autocast_context = autocast(device_type=AMP_DEVICE)
 
                     with autocast_context:
-                        # Forward pass in fp16
-                        policy_logits, value_pred, _ = model(boards)
+                        policy_logits, value_pred, _ = model(
+                            boards, move_histories, history_lengths
+                        )
 
                         # Policy loss: Soft cross-entropy for MCTS probability distributions
                         # Add small epsilon to avoid log(0) numerical issues
@@ -343,7 +416,9 @@ def execute_training_step(
 
                 else:
                     # STANDARD FP32 PATH (fallback for CPU or when AMP disabled)
-                    policy_logits, value_pred, _ = model(boards)
+                    policy_logits, value_pred, _ = model(
+                        boards, move_histories, history_lengths
+                    )
 
                     # Policy loss: Soft cross-entropy for MCTS probability distributions
                     # Add small epsilon to avoid log(0) numerical issues
@@ -371,6 +446,11 @@ def execute_training_step(
 
                     # Optimizer step
                     optimizer.step()
+
+                # Accumulate fusion gate mean (gated fusion only; None otherwise)
+                gm = _read_gate_mean(model)
+                if gm is not None:
+                    gate_values.append(gm)
 
                 # Track metrics
                 total_loss += loss.item()
@@ -451,6 +531,11 @@ def execute_training_step(
         if np.std(mcts_arr) > 1e-6 and np.std(pred_arr) > 1e-6:
             correlation = np.corrcoef(mcts_arr, pred_arr)[0, 1]
 
+    # Average fusion gate mean across all training steps this iteration.
+    # ~1.0 = CNN dominates; ~0.0 = RNN dominates; ~0.5 = balanced.
+    # None when model uses concat/attention fusion or use_rnn=False.
+    avg_gate_mean = float(np.mean(gate_values)) if gate_values else None
+
     metrics = {
         "loss": avg_loss,
         "policy_loss": avg_policy_loss,
@@ -462,9 +547,10 @@ def execute_training_step(
         "min_mcts_value": min_mcts_value,
         "max_mcts_value": max_mcts_value,
         "value_correlation": correlation,
+        "gate_mean": avg_gate_mean,
     }
 
-    # Log sanity metrics
+    # Log sanity metrics to TensorBoard
     writer.add_scalar("sanity/mean_mcts_value", mean_mcts_value, current_iteration)
     writer.add_scalar("sanity/mean_pred_value", mean_pred_value, current_iteration)
     writer.add_scalar("sanity/std_mcts_value", std_mcts_value, current_iteration)
@@ -472,12 +558,16 @@ def execute_training_step(
     writer.add_scalar("sanity/min_mcts_value", min_mcts_value, current_iteration)
     writer.add_scalar("sanity/max_mcts_value", max_mcts_value, current_iteration)
     writer.add_scalar("sanity/value_correlation", correlation, current_iteration)
+    if avg_gate_mean is not None:
+        writer.add_scalar("fusion/gate_mean", avg_gate_mean, current_iteration)
 
     print(f"\n✅ Training complete")
     print(
         f"   Loss: {avg_loss:.4f} (Policy: {avg_policy_loss:.4f}, Value: {avg_value_loss:.4f})"
     )
     print(f"   Total training steps: {total_training_steps}")
+    if avg_gate_mean is not None:
+        print(f"   Fusion gate mean: {avg_gate_mean:.4f} (1.0=CNN, 0.0=RNN)")
     print(f"\n   Value Sanity Metrics:")
     print(
         f"      MCTS targets: mean={mean_mcts_value:.4f}, std={std_mcts_value:.4f}, "

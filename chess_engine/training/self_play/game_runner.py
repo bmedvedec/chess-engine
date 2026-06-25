@@ -6,6 +6,7 @@ Plays self-play games using MCTS and collects training examples.
 
 import os
 import pickle
+import random
 from typing import List, Dict, Tuple, Optional
 
 import chess
@@ -96,10 +97,23 @@ class SelfPlayGameRunner:
         move_history: List[str] = []  # UCI moves played so far, for RNN input
         resigned = False
         resign_streak = {chess.WHITE: 0, chess.BLACK: 0}
-        _RESIGN_STREAK_REQUIRED = 4
+        _RESIGN_STREAK_REQUIRED = 3
 
         if verbose:
             print("\nStarting self-play game...")
+
+        # Random opening phase — play N random legal moves before MCTS takes over.
+        # This diversifies openings and breaks color-specific patterns that cause
+        # color bias when the model always sees the same deterministic opening lines.
+        num_random = getattr(self.config, "random_opening_moves", 0)
+        for _ in range(num_random):
+            if board.is_game_over():
+                break
+            legal = list(board.legal_moves)
+            non_captures = [m for m in legal if not board.is_capture(m)]
+            opening_move = random.choice(non_captures if non_captures else legal)
+            move_history.append(opening_move.uci())
+            board.push(opening_move)
 
         try:
             while not board.is_game_over() and move_count < max_moves:

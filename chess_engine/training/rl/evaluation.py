@@ -27,6 +27,8 @@ from chess_engine.search.mcts.search import MCTS
 _eval_current_mcts: Optional[MCTS] = None
 _eval_best_mcts: Optional[MCTS] = None
 _eval_max_moves: int = 150
+_eval_resign_threshold: float = -0.3
+_eval_resign_streak: int = 2
 
 
 def _init_eval_worker(current_path: str, best_path: str, config_dict: dict) -> None:
@@ -34,12 +36,14 @@ def _init_eval_worker(current_path: str, best_path: str, config_dict: dict) -> N
     Pool initializer — runs once per worker process.
     Loads both models from disk and builds MCTS instances into module globals.
     """
-    global _eval_current_mcts, _eval_best_mcts, _eval_max_moves
+    global _eval_current_mcts, _eval_best_mcts, _eval_max_moves, _eval_resign_threshold, _eval_resign_streak
 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     _eval_max_moves = config_dict["max_moves"]
+    _eval_resign_threshold = config_dict.get("resign_threshold", -0.3)
+    _eval_resign_streak = config_dict.get("resign_streak", 2)
 
     model_config = HybridModelConfig(
         cnn_input_channels=22,
@@ -109,6 +113,8 @@ def _play_eval_game_worker(game_num: int) -> str:
         best_mcts=_eval_best_mcts,
         current_plays_white=(game_num % 2 == 0),
         max_moves=_eval_max_moves,
+        adjudicate_threshold=_eval_resign_threshold,
+        adjudicate_streak=_eval_resign_streak,
     )
 
 
@@ -117,8 +123,8 @@ def play_evaluation_game(
     best_mcts: MCTS,
     current_plays_white: bool,
     max_moves: int,
-    adjudicate_threshold: float = -0.6,
-    adjudicate_streak: int = 4,
+    adjudicate_threshold: float = -0.3,
+    adjudicate_streak: int = 2,
 ) -> str:
     """
     Play single evaluation game between current and best models.
@@ -214,7 +220,7 @@ def execute_evaluation_step(
     Returns:
         Tuple of (eval_metrics, updated_best_model_flag, updated_best_iteration, updated_best_win_rate)
     """
-    num_workers = config.num_workers or 1
+    num_workers = config.eval_workers or 1
     print(
         f"\n⚔️  Evaluation: Playing {config.eval_games} games vs best model"
         f" ({num_workers} worker{'s' if num_workers > 1 else ''})..."
@@ -241,10 +247,12 @@ def execute_evaluation_step(
             config_dict = {
                 "eval_simulations": config.eval_simulations,
                 "c_puct": config.c_puct,
-                "max_moves": config.max_moves_per_game,
+                "max_moves": config.eval_max_moves,
                 "use_rnn": config.use_rnn,
                 "rnn_max_history": config.rnn_max_history,
                 "dirichlet_alpha": config.dirichlet_alpha,
+                "resign_threshold": config.resign_threshold,
+                "resign_streak": 2,
                 # Model architecture — needed to reconstruct HybridChessNet in each worker.
                 "cnn_filters": config.cnn_filters,
                 "cnn_blocks": config.cnn_blocks,
@@ -348,17 +356,13 @@ def execute_evaluation_step(
     updated_best_iteration = best_iteration
     updated_best_win_rate = best_win_rate
 
-    if win_rate >= config.win_threshold and win_rate > best_win_rate:
+    if win_rate >= config.win_threshold:
         print(
-            f"\n🏆 New best model! (win rate: {win_rate:.1%} >= {config.win_threshold:.1%}, beats previous best {best_win_rate:.1%})"
+            f"\n🏆 New best model! (win rate: {win_rate:.1%} >= {config.win_threshold:.1%})"
         )
         should_update_best = True
         updated_best_iteration = current_iteration
-        updated_best_win_rate = win_rate
-    elif win_rate >= config.win_threshold:
-        print(
-            f"\n   Passed threshold ({win_rate:.1%} >= {config.win_threshold:.1%}) but not better than current best ({best_win_rate:.1%})"
-        )
+        updated_best_win_rate = 0.0  # reset so next eval only needs to beat win_threshold again
     else:
         print(
             f"\n   Current model not better than best (win rate {win_rate:.1%} below threshold {config.win_threshold:.1%})"

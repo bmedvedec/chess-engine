@@ -78,6 +78,7 @@ def _init_worker(model_path: str, config_dict: dict) -> None:
         resign_threshold=config_dict["resign_threshold"],
         value_blend_alpha=config_dict["value_blend_alpha"],
         draw_value_penalty=config_dict["draw_value_penalty"],
+        random_opening_moves=config_dict.get("random_opening_moves", 0),
     )
 
     _worker_runner = SelfPlayGameRunner(model=model, device=device, config=config)
@@ -98,6 +99,7 @@ def _play_game_worker(game_num: int) -> Tuple[List[Dict], str, bool]:
             "policy": ex.policy,
             "value": ex.value,
             "move_number": ex.move_number,
+            "move_history": ex.move_history or [],
         }
         for ex in examples
     ]
@@ -148,6 +150,7 @@ def _play_single_game_worker_legacy(
         resign_threshold=config_dict["resign_threshold"],
         value_blend_alpha=config_dict["value_blend_alpha"],
         draw_value_penalty=config_dict["draw_value_penalty"],
+        random_opening_moves=config_dict.get("random_opening_moves", 0),
     )
 
     worker = SelfPlayGameRunner(model=model, device=device, config=config)
@@ -159,6 +162,7 @@ def _play_single_game_worker_legacy(
             "policy": ex.policy,
             "value": ex.value,
             "move_number": ex.move_number,
+            "move_history": ex.move_history or [],
         }
         for ex in examples
     ]
@@ -239,6 +243,7 @@ class ParallelSelfPlay:
             "rnn_max_history": self.config.rnn_max_history,
             "value_blend_alpha": self.config.value_blend_alpha,
             "draw_value_penalty": self.config.draw_value_penalty,
+            "random_opening_moves": self.config.random_opening_moves,
             # Model architecture fields required by each worker process to
             # reconstruct HybridModelConfig without access to the main process.
             **self.model_config,

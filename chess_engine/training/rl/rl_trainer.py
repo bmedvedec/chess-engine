@@ -383,7 +383,12 @@ class RLTrainer:
                         f"\n⏳ Buffer size ({len(self.replay_buffer)}) below minimum "
                         f"({self.config.min_buffer_size}). Skipping training."
                     )
-                    train_metrics = {"loss": 0.0, "policy_loss": 0.0, "value_loss": 0.0, "skipped": True}
+                    train_metrics = {
+                        "loss": 0.0,
+                        "policy_loss": 0.0,
+                        "value_loss": 0.0,
+                        "skipped": True,
+                    }
                 train_seconds = time.time() - train_start
 
                 # Step 3: Evaluation
@@ -446,9 +451,9 @@ class RLTrainer:
                     iteration_seconds=iteration_seconds,
                 )
 
-                # Step 6: Save checkpoint
-                if (iteration + 1) % self.config.save_frequency == 0:
-                    self._save_checkpoint()
+                # Step 6: Always save rolling recent checkpoint; milestone every save_frequency
+                is_milestone = (iteration + 1) % self.config.save_frequency == 0
+                self._save_checkpoint(is_milestone=is_milestone)
 
                 # Print iteration summary
                 iteration_time = time.time() - iteration_start
@@ -472,7 +477,7 @@ class RLTrainer:
         else:
             # Save final checkpoint after successful training
             print("\n💾 Saving final checkpoint...")
-            self._save_checkpoint()
+            self._save_checkpoint(is_milestone=True)
 
         finally:
             total_time = time.time() - start_time
@@ -510,11 +515,13 @@ class RLTrainer:
             "iteration/train_loss", train_metrics["loss"], self.current_iteration
         )
 
-    def _save_checkpoint(self, name: Optional[str] = None):
-        """Save training checkpoint"""
-        if name is None:
-            name = f"iteration_{self.current_iteration}"
+    def _save_checkpoint(self, name: Optional[str] = None, is_milestone: bool = False):
+        """Save training checkpoint.
 
+        Error/interrupt saves (name='error'/'interrupted'): saved as-is, no rolling cleanup.
+        Normal saves: always write a rolling recent checkpoint (last 5 kept); also write a
+        milestone checkpoint every save_frequency iterations (kept per keep_checkpoints).
+        """
         checkpoint = {
             "iteration": self.current_iteration,
             "total_games_played": self.total_games_played,
@@ -530,35 +537,70 @@ class RLTrainer:
 
         if self.scheduler:
             checkpoint["scheduler_state_dict"] = self.scheduler.state_dict()
-
-        # Save GradScaler state if using AMP
         if self.scaler:
             checkpoint["scaler_state_dict"] = self.scaler.state_dict()
 
-        # Save checkpoint
-        checkpoint_path = os.path.join(
-            self.config.checkpoint_dir, f"checkpoint_{name}.pt"
+        # Error/interrupt: single named save, no rolling behaviour
+        if name in ("error", "interrupted"):
+            checkpoint_path = os.path.join(
+                self.config.checkpoint_dir, f"checkpoint_{name}.pt"
+            )
+            torch.save(checkpoint, checkpoint_path)
+            self.replay_buffer.save(
+                os.path.join(self.config.checkpoint_dir, f"buffer_{name}.pkl")
+            )
+            print(f"\n💾 Saved checkpoint: {checkpoint_path}")
+            return
+
+        # Rolling recent checkpoint — saved every iteration, last 5 kept
+        recent_name = f"recent_{self.current_iteration}"
+        recent_path = os.path.join(
+            self.config.checkpoint_dir, f"checkpoint_{recent_name}.pt"
         )
-        torch.save(checkpoint, checkpoint_path)
+        torch.save(checkpoint, recent_path)
+        self.replay_buffer.save(
+            os.path.join(self.config.checkpoint_dir, f"buffer_{recent_name}.pkl")
+        )
 
-        # Only update latest.pt for clean per-iteration saves, not for
-        # interrupt/error recovery files, so latest.pt always points to
-        # the last successfully completed iteration.
-        if name.startswith("iteration_"):
-            latest_path = os.path.join(self.config.checkpoint_dir, "latest.pt")
-            torch.save(checkpoint, latest_path)
+        # latest.pt always points to the last successfully completed iteration
+        latest_path = os.path.join(self.config.checkpoint_dir, "latest.pt")
+        torch.save(checkpoint, latest_path)
 
-        # Save replay buffer
-        buffer_path = os.path.join(self.config.checkpoint_dir, f"buffer_{name}.pkl")
-        self.replay_buffer.save(buffer_path)
+        # Milestone checkpoint — saved every save_frequency iterations, kept longer
+        if is_milestone:
+            milestone_name = f"iteration_{self.current_iteration}"
+            milestone_path = os.path.join(
+                self.config.checkpoint_dir, f"checkpoint_{milestone_name}.pt"
+            )
+            torch.save(checkpoint, milestone_path)
+            self.replay_buffer.save(
+                os.path.join(
+                    self.config.checkpoint_dir, f"buffer_{milestone_name}.pkl"
+                )
+            )
+            print(f"\n💾 Saved milestone checkpoint: {milestone_path}")
 
-        print(f"\n💾 Saved checkpoint: {checkpoint_path}")
+        print(f"\n💾 Saved recent checkpoint: {recent_path}")
 
-        # Clean old checkpoints
+        self._clean_recent_checkpoints()
         self._clean_old_checkpoints()
 
+    def _clean_recent_checkpoints(self, keep: int = 5):
+        """Remove rolling recent checkpoints, keeping only the last `keep`."""
+        checkpoint_dir = Path(self.config.checkpoint_dir)
+        recents = sorted(
+            checkpoint_dir.glob("checkpoint_recent_*.pt"),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )
+        for checkpoint in recents[keep:]:
+            checkpoint.unlink()
+            buffer_file = checkpoint.parent / f"buffer_{checkpoint.stem}.pkl"
+            if buffer_file.exists():
+                buffer_file.unlink()
+
     def _clean_old_checkpoints(self):
-        """Remove old checkpoints, keeping only recent ones"""
+        """Remove old milestone checkpoints, keeping only recent ones."""
         checkpoint_dir = Path(self.config.checkpoint_dir)
         checkpoints = sorted(
             checkpoint_dir.glob("checkpoint_iteration_*.pt"),
@@ -642,10 +684,14 @@ class RLTrainer:
         self.best_win_rate = checkpoint.get("best_win_rate", 0.0)
         self.history = checkpoint.get("history", self.history)
 
-        # Try to load replay buffer
+        # Try to load replay buffer — milestone buffer first, then recent fallback
         buffer_path = os.path.join(
             self.config.checkpoint_dir, f"buffer_iteration_{self.current_iteration}.pkl"
         )
+        if not os.path.exists(buffer_path):
+            buffer_path = os.path.join(
+                self.config.checkpoint_dir, f"buffer_recent_{self.current_iteration}.pkl"
+            )
         if os.path.exists(buffer_path):
             self.replay_buffer.load(buffer_path)
             print(f"   Loaded replay buffer: {len(self.replay_buffer)} examples")

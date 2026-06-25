@@ -37,6 +37,7 @@ class SelfPlayConfig:
     resign_threshold: float = DEFAULT_RESIGN_THRESHOLD
     value_blend_alpha: float = DEFAULT_VALUE_BLEND_ALPHA
     draw_value_penalty: float = DEFAULT_DRAW_VALUE_PENALTY
+    random_opening_moves: int = 0
 
     @classmethod
     def from_args(cls, args) -> "SelfPlayConfig":

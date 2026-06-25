@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-
 # All columns in the CSV, in order.
 CSV_COLUMNS = [
     # --- identity ---
@@ -39,6 +38,8 @@ CSV_COLUMNS = [
     "std_pred_value",
     "min_mcts_value",
     "max_mcts_value",
+    # --- fusion gate (gated fusion only; None otherwise) ---
+    "gate_mean",
     # --- evaluation ---
     "eval_win_rate",
     # --- self-play game stats ---
@@ -108,7 +109,7 @@ class IterationLogger:
         self,
         iteration: int,
         train_metrics: Dict[str, Any],
-        selfplay_stats,          # SelfPlayStatistics or None
+        selfplay_stats,  # SelfPlayStatistics or None
         eval_metrics: Optional[Dict[str, Any]],
         buffer_size: int,
         games_played: int,
@@ -136,14 +137,25 @@ class IterationLogger:
             "std_pred_value": _fmt(train_metrics.get("std_pred_value")),
             "min_mcts_value": _fmt(train_metrics.get("min_mcts_value")),
             "max_mcts_value": _fmt(train_metrics.get("max_mcts_value")),
+            "gate_mean": _fmt(train_metrics.get("gate_mean")),
             # evaluation
-            "eval_win_rate": _fmt(eval_metrics.get("win_rate") if eval_metrics else None),
+            "eval_win_rate": _fmt(
+                eval_metrics.get("win_rate") if eval_metrics else None
+            ),
             # self-play game stats
-            "white_win_pct": _fmt(selfplay_stats.white_win_rate if selfplay_stats else None),
-            "black_win_pct": _fmt(selfplay_stats.black_win_rate if selfplay_stats else None),
+            "white_win_pct": _fmt(
+                selfplay_stats.white_win_rate if selfplay_stats else None
+            ),
+            "black_win_pct": _fmt(
+                selfplay_stats.black_win_rate if selfplay_stats else None
+            ),
             "draw_pct": _fmt(selfplay_stats.draw_rate if selfplay_stats else None),
-            "resign_pct": _fmt(selfplay_stats.resignation_rate if selfplay_stats else None),
-            "avg_moves_per_game": _fmt(selfplay_stats.avg_moves_per_game if selfplay_stats else None),
+            "resign_pct": _fmt(
+                selfplay_stats.resignation_rate if selfplay_stats else None
+            ),
+            "avg_moves_per_game": _fmt(
+                selfplay_stats.avg_moves_per_game if selfplay_stats else None
+            ),
             "total_games": selfplay_stats.total_games if selfplay_stats else None,
             # training state
             "buffer_size": buffer_size,
