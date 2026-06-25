@@ -40,15 +40,7 @@ from chess_engine.training.rl.iteration_logger import IterationLogger
 
 
 class RLTrainer:
-    """
-    Reinforcement Learning Trainer for Chess Engine.
-
-    Implements complete AlphaZero-style training loop:
-    - Self-play game generation
-    - Network training
-    - Model evaluation
-    - Iterative improvement
-    """
+    """AlphaZero-style RL training loop: self-play, training, evaluation, iteration."""
 
     def __init__(
         self,
@@ -57,26 +49,15 @@ class RLTrainer:
         resume_from: Optional[str] = None,
         pretrained_path: Optional[str] = None,
     ):
-        """
-        Initialize RL trainer.
-
-        Args:
-            config: Training configuration
-            model: Optional pre-initialized model
-            resume_from: Optional checkpoint path to resume from
-            pretrained_path: Optional pretrained model for transfer learning
-        """
         self.config = config
 
-        # ---- device setup ----
         self.device = torch.device(
             config.device
             if torch.cuda.is_available() and config.device == "cuda"
             else "cpu"
         )
-        print(f"\n🖥️  Using device: {self.device}")
+        print(f"\nUsing device: {self.device}")
 
-        # ---- build or attach model ----
         if model is None:
             self.model_config = HybridModelConfig(
                 cnn_input_channels=22,
@@ -96,9 +77,8 @@ class RLTrainer:
             self.model = model.to(self.device)
             self.model_config = model.config
 
-        # ---- load pretrained weights (transfer learning) ----
         if pretrained_path and not resume_from:
-            print(f"\n📥 Loading pretrained weights from: {pretrained_path}")
+            print(f"\nLoading pretrained weights from: {pretrained_path}")
             checkpoint = torch.load(pretrained_path, map_location=self.device)
 
             state_dict = (
@@ -108,34 +88,28 @@ class RLTrainer:
             )
 
             self.model.load_state_dict(state_dict, strict=False)
-            print("   ✅ Weights loaded successfully")
+            print("   Weights loaded successfully")
 
-        # ---- best model snapshot ----
         self.best_model = HybridChessNet(self.model_config).to(self.device)
         self.best_model.load_state_dict(self.model.state_dict())
 
-        # ---- encoders ----
         self.board_encoder = BoardEncoder()
         self.move_encoder = MoveEncoder()
 
-        # ---- optimizer & scheduler ----
         self.optimizer = self._create_optimizer()
         self.scheduler = self._create_scheduler()
 
-        # ---- loss functions ----
         self.value_criterion = nn.MSELoss()
 
-        # ---- mixed precision ----
         self.use_amp = config.use_amp and self.device.type == "cuda"
         self.scaler = GradScaler() if self.use_amp else None
 
         print(
-            "⚡ Mixed Precision (AMP): Enabled"
+            "Mixed Precision (AMP): Enabled"
             if self.use_amp
-            else "⚠️  Mixed Precision (AMP): Disabled"
+            else "Mixed Precision (AMP): Disabled"
         )
 
-        # ---- replay buffer ----
         if config.use_prioritized_replay:
             self.replay_buffer: ReplayBuffer = PrioritizedReplayBuffer(
                 max_size=config.buffer_size,
@@ -143,7 +117,7 @@ class RLTrainer:
                 memory_efficient=True,
             )
             print(
-                f"📦 Replay buffer: Prioritized (α={config.per_alpha}, "
+                f"Replay buffer: Prioritized (α={config.per_alpha}, "
                 f"β {config.per_beta}→{config.per_beta_end})"
             )
         else:
@@ -151,16 +125,14 @@ class RLTrainer:
                 max_size=config.buffer_size,
                 memory_efficient=True,
             )
-            print("📦 Replay buffer: Uniform")
+            print("Replay buffer: Uniform")
 
-        # ---- training state ----
         self.current_iteration = 0
         self.total_games_played = 0
         self.total_training_steps = 0
         self.best_iteration = 0
         self.best_win_rate = 0.0
 
-        # ---- history ----
         self.history: Dict[str, list] = {
             "iterations": [],
             "games_played": [],
@@ -174,7 +146,6 @@ class RLTrainer:
             "best_iteration": [],
         }
 
-        # ---- logging ----
         os.makedirs(config.log_dir, exist_ok=True)
         os.makedirs(config.checkpoint_dir, exist_ok=True)
         self.writer = SummaryWriter(log_dir=config.log_dir)
@@ -183,18 +154,13 @@ class RLTrainer:
             config_dict=config.to_dict(),
         )
 
-        # ---- resume training ----
         if resume_from:
             self._load_checkpoint(resume_from)
 
-        # ---- save config snapshot ----
         config.save(os.path.join(config.checkpoint_dir, "config.json"))
-
-        # ---- save initial best model ----
         self._save_best_model("Initial best model saved")
 
     def _create_optimizer(self) -> optim.Optimizer:
-        """Create optimizer"""
         if self.config.optimizer == "adam":
             return optim.Adam(
                 self.model.parameters(),
@@ -248,12 +214,7 @@ class RLTrainer:
             return None
 
     def _save_best_model(self, message: str = ""):
-        """
-        Save best model to a separate file (won't be deleted by checkpoint rotation).
-
-        Args:
-            message: Optional message to print
-        """
+        """Save best model to a separate file (won't be deleted by checkpoint rotation)."""
         best_path = os.path.join(self.config.checkpoint_dir, "best_model.pt")
 
         checkpoint = {
@@ -270,26 +231,16 @@ class RLTrainer:
         torch.save(checkpoint, best_path)
 
         if message:
-            print(f"\n💾 {message}")
+            print(f"\n{message}")
         print(f"   Saved to: {best_path}")
         print(f"   Iteration: {self.best_iteration + 1}")
         print(f"   Win rate: {self.best_win_rate:.1%}")
 
     def train(self):
-        """
-        Main training loop.
-
-        Executes the complete AlphaZero training pipeline:
-        1. Generate self-play games
-        2. Train network on collected data
-        3. Evaluate new model
-        4. Update best model if improved
-        5. Repeat
-        """
         print("\n" + "=" * 80)
         print("STARTING RL TRAINING LOOP")
         print("=" * 80)
-        print(f"\n📋 Configuration:")
+        print("\nConfiguration:")
         print(f"   Iterations: {self.config.num_iterations}")
         print(f"   Games per iteration: {self.config.games_per_iteration}")
         print(
@@ -314,7 +265,6 @@ class RLTrainer:
                 print(f"ITERATION {iteration + 1}/{end_iteration}")
                 print(f"{'='*80}")
 
-                # Step 1: Self-play
                 _, self.total_games_played, selfplay_stats, selfplay_seconds = (
                     execute_self_play_step(
                         model=self.model,
@@ -339,7 +289,6 @@ class RLTrainer:
                 else:
                     per_beta = None
 
-                # Step 2: Training
                 train_start = time.time()
                 if len(self.replay_buffer) >= self.config.min_buffer_size:
                     train_metrics, self.total_training_steps, per_update = (
@@ -380,7 +329,7 @@ class RLTrainer:
                         )
                 else:
                     print(
-                        f"\n⏳ Buffer size ({len(self.replay_buffer)}) below minimum "
+                        f"\nBuffer size ({len(self.replay_buffer)}) below minimum "
                         f"({self.config.min_buffer_size}). Skipping training."
                     )
                     train_metrics = {
@@ -391,7 +340,6 @@ class RLTrainer:
                     }
                 train_seconds = time.time() - train_start
 
-                # Step 3: Evaluation
                 eval_metrics = None
                 if (iteration + 1) % self.config.eval_frequency == 0:
                     (
@@ -418,7 +366,6 @@ class RLTrainer:
                             f"Best model updated (win rate: {self.best_win_rate:.1%})"
                         )
 
-                # Step 4: Learning rate schedule (before logging so CSV captures new LR)
                 if self.scheduler and not train_metrics.get("skipped", False):
                     lr_before = self.optimizer.param_groups[0]["lr"]
                     if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
@@ -431,10 +378,9 @@ class RLTrainer:
                     lr_after = self.optimizer.param_groups[0]["lr"]
                     if lr_after != lr_before:
                         print(
-                            f"\n📉 LR reduced: {lr_before:.6f} → {lr_after:.6f} (scheduler={self.config.lr_schedule})"
+                            f"\nLR reduced: {lr_before:.6f} → {lr_after:.6f} (scheduler={self.config.lr_schedule})"
                         )
 
-                # Step 5: Update history and log (uses post-scheduler LR)
                 iteration_seconds = time.time() - iteration_start
                 self._update_history(train_metrics, eval_metrics)
                 self.iter_logger.log(
@@ -451,23 +397,21 @@ class RLTrainer:
                     iteration_seconds=iteration_seconds,
                 )
 
-                # Step 6: Always save rolling recent checkpoint; milestone every save_frequency
                 is_milestone = (iteration + 1) % self.config.save_frequency == 0
                 self._save_checkpoint(is_milestone=is_milestone)
 
-                # Print iteration summary
                 iteration_time = time.time() - iteration_start
                 self._print_iteration_summary(
                     iteration, train_metrics, eval_metrics, iteration_time
                 )
 
         except KeyboardInterrupt:
-            print("\n\n⚠️  Training interrupted by user")
+            print("\n\nTraining interrupted by user")
             print("Saving checkpoint...")
             self._save_checkpoint(name="interrupted")
 
         except Exception as e:
-            print(f"\n\n❌ Training failed with error: {e}")
+            print(f"\n\nTraining failed with error: {e}")
 
             traceback.print_exc()
             print("\nSaving checkpoint...")
@@ -475,8 +419,7 @@ class RLTrainer:
             raise
 
         else:
-            # Save final checkpoint after successful training
-            print("\n💾 Saving final checkpoint...")
+            print("\nSaving final checkpoint...")
             self._save_checkpoint(is_milestone=True)
 
         finally:
@@ -487,7 +430,6 @@ class RLTrainer:
     def _update_history(
         self, train_metrics: Dict[str, float], eval_metrics: Optional[Dict[str, float]]
     ):
-        """Update training history"""
         self.history["iterations"].append(self.current_iteration)
         self.history["games_played"].append(self.total_games_played)
         self.history["buffer_size"].append(len(self.replay_buffer))
@@ -504,7 +446,6 @@ class RLTrainer:
             self.history["eval_win_rate"].append(None)
             self.history["eval_games"].append(0)
 
-        # Log to tensorboard
         self.writer.add_scalar(
             "iteration/games_played", self.total_games_played, self.current_iteration
         )
@@ -549,7 +490,7 @@ class RLTrainer:
             self.replay_buffer.save(
                 os.path.join(self.config.checkpoint_dir, f"buffer_{name}.pkl")
             )
-            print(f"\n💾 Saved checkpoint: {checkpoint_path}")
+            print(f"\nSaved checkpoint: {checkpoint_path}")
             return
 
         # Rolling recent checkpoint — saved every iteration, last 5 kept
@@ -578,15 +519,14 @@ class RLTrainer:
                     self.config.checkpoint_dir, f"buffer_{milestone_name}.pkl"
                 )
             )
-            print(f"\n💾 Saved milestone checkpoint: {milestone_path}")
+            print(f"\nSaved milestone checkpoint: {milestone_path}")
 
-        print(f"\n💾 Saved recent checkpoint: {recent_path}")
+        print(f"\nSaved recent checkpoint: {recent_path}")
 
         self._clean_recent_checkpoints()
         self._clean_old_checkpoints()
 
     def _clean_recent_checkpoints(self, keep: int = 5):
-        """Remove rolling recent checkpoints, keeping only the last `keep`."""
         checkpoint_dir = Path(self.config.checkpoint_dir)
         recents = sorted(
             checkpoint_dir.glob("checkpoint_recent_*.pt"),
@@ -600,7 +540,6 @@ class RLTrainer:
                 buffer_file.unlink()
 
     def _clean_old_checkpoints(self):
-        """Remove old milestone checkpoints, keeping only recent ones."""
         checkpoint_dir = Path(self.config.checkpoint_dir)
         checkpoints = sorted(
             checkpoint_dir.glob("checkpoint_iteration_*.pt"),
@@ -608,10 +547,8 @@ class RLTrainer:
             reverse=True,
         )
 
-        # Remove old checkpoints
         for checkpoint in checkpoints[self.config.keep_checkpoints :]:
             checkpoint.unlink()
-            # Also remove corresponding buffer
             # Derive buffer filename from checkpoint stem directly — avoids
             # fragile split('_')[-1] if stem ever contains a non-integer suffix.
             buffer_file = checkpoint.parent / f"buffer_{checkpoint.stem}.pkl"
@@ -619,17 +556,16 @@ class RLTrainer:
                 buffer_file.unlink()
 
     def _load_checkpoint(self, filepath: str):
-        """Load training checkpoint"""
-        print(f"\n📂 Loading checkpoint: {filepath}")
+        print(f"\nLoading checkpoint: {filepath}")
 
         checkpoint = torch.load(filepath, map_location=self.device)
 
         def _load(model, state_dict):
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
             if missing:
-                print(f"   ⚠  New keys (randomly initialised): {missing}")
+                print(f"   New keys (randomly initialised): {missing}")
             if unexpected:
-                print(f"   ⚠  Dropped keys (not in model):    {unexpected}")
+                print(f"   Dropped keys (not in model):    {unexpected}")
 
         _load(self.model, checkpoint["model_state_dict"])
         _load(self.best_model, checkpoint["best_model_state_dict"])
@@ -644,8 +580,8 @@ class RLTrainer:
                 )
         except (ValueError, KeyError, RuntimeError) as e:
             print(
-                f"   ⚠  Optimizer state incompatible (architecture changed?): {e}\n"
-                f"   ⚠  Reinitialising optimizer from scratch at lr={self.config.learning_rate}"
+                f"   Optimizer state incompatible (architecture changed?): {e}\n"
+                f"   Reinitialising optimizer from scratch at lr={self.config.learning_rate}"
             )
         else:
             print(f"   LR: {self.config.learning_rate} (unchanged)")
@@ -667,15 +603,12 @@ class RLTrainer:
                     f"   Scheduler: '{self.config.lr_schedule}' starting fresh ({reason})"
                 )
 
-        # Restore GradScaler state if using AMP
         if "scaler_state_dict" in checkpoint and self.scaler:
             self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
-            print(f"   Loaded GradScaler state")
+            print("   Loaded GradScaler state")
 
-        # Restore training state
         self.current_iteration = checkpoint["iteration"]
 
-        # Log resume information (display as 1-based)
         print(f"   Resuming from iteration {self.current_iteration + 1}")
         print(f"   Next iteration will be: {self.current_iteration + 2}")
         self.total_games_played = checkpoint.get("total_games_played", 0)
@@ -696,7 +629,7 @@ class RLTrainer:
             self.replay_buffer.load(buffer_path)
             print(f"   Loaded replay buffer: {len(self.replay_buffer)} examples")
 
-        print(f"✅ Resumed from iteration {self.current_iteration + 1}")
+        print(f"Resumed from iteration {self.current_iteration + 1}")
 
     def _print_iteration_summary(
         self,
@@ -705,11 +638,10 @@ class RLTrainer:
         eval_metrics: Optional[Dict[str, float]],
         iteration_time: float,
     ):
-        """Print summary of iteration"""
         print(f"\n{'='*80}")
         print(f"ITERATION {iteration + 1} SUMMARY")
         print(f"{'='*80}")
-        print(f"\n📊 Metrics:")
+        print(f"\nMetrics:")
         print(f"   Total games: {self.total_games_played}")
         print(f"   Buffer size: {len(self.replay_buffer)}")
         print(f"   Train loss: {train_metrics['loss']:.4f}")
@@ -718,38 +650,36 @@ class RLTrainer:
         print(f"   Learning rate: {self.optimizer.param_groups[0]['lr']:.6f}")
 
         if eval_metrics:
-            print(f"\n⚔️  Evaluation:")
+            print(f"\nEvaluation:")
             print(f"   Win rate: {eval_metrics['win_rate']:.1%}")
             print(
                 f"   Results: {eval_metrics['wins']}W / {eval_metrics['losses']}L / {eval_metrics['draws']}D"
             )
 
-        print(f"\n🏆 Best Model:")
+        print(f"\nBest Model:")
         print(f"   Iteration: {self.best_iteration + 1}")
         print(f"   Win rate: {self.best_win_rate:.1%}")
 
-        print(f"\n⏱️  Time: {iteration_time:.1f}s")
+        print(f"\nTime: {iteration_time:.1f}s")
 
     def _print_final_summary(self, total_time: float):
-        """Print final training summary"""
         print("\n" + "=" * 80)
         print("TRAINING COMPLETE")
         print("=" * 80)
-        print(f"\n📊 Final Statistics:")
+        print(f"\nFinal Statistics:")
         print(f"   Total iterations: {self.current_iteration + 1}")
         print(f"   Total games: {self.total_games_played}")
         print(f"   Total training steps: {self.total_training_steps}")
         print(f"   Final buffer size: {len(self.replay_buffer)}")
-        print(f"\n🏆 Best Model:")
+        print(f"\nBest Model:")
         print(f"   Iteration: {self.best_iteration + 1}")
         print(f"   Win rate: {self.best_win_rate:.1%}")
-        print(f"\n⏱️  Total Time: {total_time/3600:.1f} hours")
+        print(f"\nTotal Time: {total_time/3600:.1f} hours")
         print(
             f"   Avg time per iteration: {total_time/(self.current_iteration+1):.1f}s"
         )
 
-        # Save final history
         history_path = os.path.join(self.config.checkpoint_dir, "training_history.json")
         with open(history_path, "w") as f:
             json.dump(self.history, f, indent=2)
-        print(f"\n💾 Saved training history: {history_path}")
+        print(f"\nSaved training history: {history_path}")

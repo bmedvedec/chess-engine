@@ -8,8 +8,6 @@ Manages time allocation across moves with different strategies:
 - Proportional: More time for complex positions
 - Incremental: Save increment for later
 - Adaptive: Learn from game phase
-
-Essential for real-time play and tournaments!
 """
 
 import time
@@ -46,21 +44,7 @@ class PositionComplexity:
 
     @staticmethod
     def calculate(board: chess.Board) -> float:
-        """
-        Calculate position complexity score (0.0 to 1.0).
-
-        Factors:
-        - Piece count (more pieces = more complex)
-        - Legal moves (more options = more complex)
-        - Checks/threats
-        - Game phase
-
-        Args:
-            board: Chess board position
-
-        Returns:
-            Complexity score (0 = simple, 1 = very complex)
-        """
+        """Calculate position complexity score (0.0 to 1.0)."""
         complexity = 0.0
 
         # Factor 1: Number of legal moves (0-1 scale)
@@ -140,34 +124,18 @@ class TimeControl:
         move_number: int,
         remaining_time: Optional[float] = None,
     ) -> float:
-        """
-        Calculate time to spend on this move.
-
-        Args:
-            board: Current board position
-            move_number: Current move number
-            remaining_time: Time remaining (if None, uses config.total_time - time_used)
-
-        Returns:
-            Time in seconds to allocate for this move
-        """
-        # Use provided remaining time or calculate from config
         if remaining_time is None:
             remaining_time = self.config.total_time - self.time_used
 
-        # Safety check
         if remaining_time <= 0:
-            return 0.1  # Minimum time
+            return 0.1
 
-        # Check if in emergency mode
         time_ratio = remaining_time / self.config.total_time
         if time_ratio < self.config.emergency_threshold:
             return self._emergency_time_allocation(remaining_time)
 
-        # Calculate position complexity
         complexity = PositionComplexity.calculate(board)
 
-        # Apply strategy
         if self.config.strategy == "fixed":
             return self._fixed_time(remaining_time, move_number)
         elif self.config.strategy == "proportional":
@@ -177,7 +145,6 @@ class TimeControl:
         elif self.config.strategy == "adaptive":
             return self._adaptive_time(remaining_time, move_number, complexity, board)
         else:
-            # Default to proportional
             return self._proportional_time(remaining_time, move_number, complexity)
 
     def _fixed_time(self, remaining_time: float, move_number: int) -> float:
@@ -476,14 +443,14 @@ def test_time_control():
     print(f"   Statistics: {stats}")
 
     print("\n" + "=" * 80)
-    print("✅ TIME CONTROL TESTS COMPLETE")
+    print("TIME CONTROL TESTS COMPLETE")
     print("=" * 80)
     print("\nKey features working:")
-    print("  ✓ Multiple time strategies (fixed, proportional, incremental, adaptive)")
-    print("  ✓ Position complexity analysis")
-    print("  ✓ Emergency time management")
-    print("  ✓ Time tracking and statistics")
-    print("  ✓ Game phase detection")
+    print("  - Multiple time strategies (fixed, proportional, incremental, adaptive)")
+    print("  - Position complexity analysis")
+    print("  - Emergency time management")
+    print("  - Time tracking and statistics")
+    print("  - Game phase detection")
 
     print("\nNext steps:")
     print("  1. Integrate with MCTS (add time limit to search)")

@@ -25,26 +25,10 @@ def execute_self_play_step(
     device: torch.device,
     total_games_played: int,
 ) -> tuple:
-    """
-    Execute self-play game generation.
-
-    Args:
-        model: Neural network model
-        config: RL training configuration
-        replay_buffer: Replay buffer to store examples
-        device: Torch device
-        total_games_played: Running count of total games played
-
-    Returns:
-        Tuple of (examples, updated_total_games_played, stats, selfplay_seconds)
-        where stats is a SelfPlayStatistics object and selfplay_seconds is the
-        wall-clock time for this self-play phase.
-    """
-    print(f"\n🎮 Self-Play: Generating {config.games_per_iteration} games...")
+    print(f"\nSelf-Play: Generating {config.games_per_iteration} games...")
 
     model.eval()
 
-    # Create self-play configuration
     selfplay_config = SelfPlayConfig(
         num_simulations=config.num_simulations,
         c_puct=config.c_puct,
@@ -62,11 +46,9 @@ def execute_self_play_step(
         random_opening_moves=config.random_opening_moves,
     )
 
-    # Generate games
     start_time = time.time()
 
     if config.use_parallel_selfplay:
-        # Save current model for parallel workers
         temp_model_path = os.path.join(config.checkpoint_dir, "temp_model.pt")
         torch.save(
             {
@@ -80,7 +62,6 @@ def execute_self_play_step(
             temp_model_path,
         )
 
-        # Parallel self-play
         worker = ParallelSelfPlay(
             model_path=temp_model_path,
             config=selfplay_config,
@@ -101,7 +82,6 @@ def execute_self_play_step(
             buffer=replay_buffer,
         )
     else:
-        # Sequential self-play
         worker = SelfPlayGameRunner(
             model=model,
             device=device,
@@ -115,7 +95,7 @@ def execute_self_play_step(
     elapsed = time.time() - start_time
     total_games_played += config.games_per_iteration
 
-    print(f"\n✅ Generated {len(examples)} training examples")
+    print(f"\nGenerated {len(examples)} training examples")
     print(
         f"   Time: {elapsed:.1f}s ({elapsed/config.games_per_iteration:.1f}s per game)"
     )

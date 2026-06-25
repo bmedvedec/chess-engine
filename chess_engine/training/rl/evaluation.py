@@ -126,23 +126,7 @@ def play_evaluation_game(
     adjudicate_threshold: float = -0.3,
     adjudicate_streak: int = 2,
 ) -> str:
-    """
-    Play single evaluation game between current and best models.
-
-    Args:
-        current_mcts: Pre-built MCTS for the current model (reused across games)
-        best_mcts: Pre-built MCTS for the best model (reused across games)
-        current_plays_white: Whether current model plays white
-        max_moves: Maximum moves before declaring draw
-        adjudicate_threshold: Root value below which a position is considered
-            losing for the side to move (default -0.6)
-        adjudicate_streak: Number of consecutive turns a model must evaluate
-            its own position below adjudicate_threshold before the game is
-            adjudicated as a loss for that model (default 4)
-
-    Returns:
-        "current_win", "best_win", or "draw"
-    """
+    """Play one evaluation game; returns 'current_win', 'best_win', or 'draw'."""
 
     board = chess.Board()
 
@@ -202,27 +186,9 @@ def execute_evaluation_step(
     best_iteration: int,
     best_win_rate: float,
 ) -> tuple:
-    """
-    Evaluate current model against best model via head-to-head matches.
-
-    Args:
-        current_model: Current training model
-        best_model: Best model so far
-        board_encoder: Board encoding utility
-        move_encoder: Move encoding utility
-        device: Torch device
-        config: RLTrainingConfig
-        writer: TensorBoard writer
-        current_iteration: Current iteration number
-        best_iteration: Best model iteration
-        best_win_rate: Best win rate so far
-
-    Returns:
-        Tuple of (eval_metrics, updated_best_model_flag, updated_best_iteration, updated_best_win_rate)
-    """
     num_workers = config.eval_workers or 1
     print(
-        f"\n⚔️  Evaluation: Playing {config.eval_games} games vs best model"
+        f"\nEvaluation: Playing {config.eval_games} games vs best model"
         f" ({num_workers} worker{'s' if num_workers > 1 else ''})..."
     )
 
@@ -234,7 +200,6 @@ def execute_evaluation_step(
     draws = 0
 
     if num_workers > 1:
-        # --- Parallel path ---
         # Save both model state dicts to temp files so worker processes can load them.
         current_tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
         best_tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
@@ -291,9 +256,8 @@ def execute_evaluation_step(
             os.unlink(best_tmp.name)
 
     else:
-        # --- Sequential path ---
-        # Build MCTS instances once — reused across all eval games.
-        # Cache stays warm between games (deterministic eval revisits same openings).
+        # Build MCTS instances once — reused across games; cache stays warm.
+        # (deterministic eval revisits same openings, so warm cache matters)
         current_mcts = MCTS(
             model=current_model,
             board_encoder=board_encoder,
@@ -337,7 +301,6 @@ def execute_evaluation_step(
             else:
                 draws += 1
 
-    # Calculate win rate
     total_games = wins + losses + draws
     win_rate = (wins + 0.5 * draws) / total_games if total_games > 0 else 0.0
 
@@ -348,17 +311,16 @@ def execute_evaluation_step(
         "draws": draws,
     }
 
-    print(f"\n✅ Evaluation complete")
+    print("\nEvaluation complete")
     print(f"   Win rate: {win_rate:.1%} ({wins}W / {losses}L / {draws}D)")
 
-    # Determine if best model should be updated
     should_update_best = False
     updated_best_iteration = best_iteration
     updated_best_win_rate = best_win_rate
 
     if win_rate >= config.win_threshold:
         print(
-            f"\n🏆 New best model! (win rate: {win_rate:.1%} >= {config.win_threshold:.1%})"
+            f"\nNew best model (win rate: {win_rate:.1%} >= {config.win_threshold:.1%})"
         )
         should_update_best = True
         updated_best_iteration = current_iteration
@@ -368,7 +330,6 @@ def execute_evaluation_step(
             f"\n   Current model not better than best (win rate {win_rate:.1%} below threshold {config.win_threshold:.1%})"
         )
 
-    # Log to tensorboard
     writer.add_scalar("eval/win_rate", win_rate, current_iteration)
     writer.add_scalar("eval/wins", wins, current_iteration)
     writer.add_scalar("eval/losses", losses, current_iteration)

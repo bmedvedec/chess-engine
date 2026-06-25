@@ -18,24 +18,7 @@ AUGMENTATION_PROBABILITY = 0.5  # 50% chance to apply augmentation
 
 
 class ChessDataset(Dataset):
-    """
-    PyTorch Dataset for chess positions with data augmentation and tensor caching.
-
-    Features:
-    - Data augmentation (horizontal flip via BoardAugmentations)
-    - Tensor caching for faster iteration
-    - Memory-efficient operation
-
-    Usage:
-        dataset = ChessDataset(
-            examples,
-            board_encoder,
-            move_encoder,
-            augment=True,
-            cache_tensors=True
-        )
-        dataloader = DataLoader(dataset, batch_size=256, shuffle=True)
-    """
+    """PyTorch Dataset for chess positions with optional augmentation and tensor caching."""
 
     def __init__(
         self,
@@ -45,28 +28,16 @@ class ChessDataset(Dataset):
         augment: bool = True,
         cache_tensors: bool = False,
     ):
-        """
-        Initialize dataset.
-
-        Args:
-            examples: List of training examples from parser
-            board_encoder: BoardEncoder instance
-            move_encoder: MoveEncoder instance
-            augment: Whether to apply data augmentation (default: True)
-            cache_tensors: Whether to cache encoded tensors (faster but uses more memory)
-        """
         self.examples = examples
         self.board_encoder = board_encoder
         self.move_encoder = move_encoder
         self.augment = augment
         self.cache_tensors = cache_tensors
 
-        # Initialize cache if enabled
         self._tensor_cache: Optional[Dict[int, Tuple[torch.Tensor, int, float]]] = (
             {} if cache_tensors else None
         )
 
-        # Pre-compute and cache all tensors if caching is enabled
         if self.cache_tensors:
             self._build_cache()
 
@@ -91,16 +62,6 @@ class ChessDataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Get a single training example.
-
-        Returns:
-            Tuple of:
-            - board_tensor: (20, 8, 8)
-            - move_index: scalar
-            - outcome: scalar
-        """
-        # If caching enabled, get from cache
         if self._tensor_cache is not None:
             board_tensor, move_index, outcome = self._tensor_cache[idx]
 
@@ -115,22 +76,17 @@ class ChessDataset(Dataset):
                 torch.tensor(outcome, dtype=torch.float32),
             )
 
-        # Otherwise, compute on-the-fly (no caching)
         example = self.examples[idx]
 
-        board = example["board"].copy()  # Copy to avoid modifying original
+        board = example["board"].copy()  # avoid modifying original
         move = example["move"]
         outcome = example["outcome"]
 
-        # Apply data augmentation if enabled (50% chance)
         if self.augment and torch.rand(1).item() < AUGMENTATION_PROBABILITY:
             board = BoardAugmentations.horizontal_flip(board)
             move = BoardAugmentations.flip_move_horizontal(move)
 
-        # Encode board
         board_tensor = self.board_encoder.board_to_tensor(board)
-
-        # Encode move
         move_index = self.move_encoder.encode_move(move)
 
         return (

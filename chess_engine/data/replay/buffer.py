@@ -19,25 +19,9 @@ from chess_engine.data.replay.storage import GameExample
 
 
 class ReplayBuffer:
-    """
-    Replay buffer for storing self-play training examples.
-
-    Features:
-    - Memory-efficient storage (FEN strings)
-    - Fixed maximum size (FIFO when full)
-    - Random sampling for training
-    - Move history tracking for RNN
-    - Weighted sampling for decisive games
-    """
+    """FIFO replay buffer storing self-play examples as FEN strings for memory efficiency."""
 
     def __init__(self, max_size: int = 100000, memory_efficient: bool = True):
-        """
-        Initialize replay buffer.
-
-        Args:
-            max_size: Maximum number of examples to store
-            memory_efficient: If True, store FEN strings instead of Board objects
-        """
         self.max_size = max_size
         self.memory_efficient = memory_efficient
         self.buffer: deque = deque(maxlen=max_size)
@@ -49,15 +33,6 @@ class ReplayBuffer:
         value_target: float,
         move_history: Optional[Sequence[chess.Move]] = None,
     ) -> None:
-        """
-        Add a training example to the buffer.
-
-        Args:
-            board: Chess board position
-            policy_target: Target policy distribution (visit counts from MCTS)
-            value_target: Target value (game outcome: 1.0, 0.0, -1.0)
-            move_history: Optional move history for RNN
-        """
         if self.memory_efficient:
             example = {
                 "fen": board.fen(),
@@ -83,15 +58,6 @@ class ReplayBuffer:
         outcome: float,
         move_histories: Optional[Sequence[Sequence[chess.Move]]] = None,
     ) -> None:
-        """
-        Add all positions from a complete game.
-
-        Args:
-            positions: List of board positions from the game
-            policies: List of policy targets (one per position)
-            outcome: Game outcome from perspective of first player
-            move_histories: Optional move histories for each position
-        """
         if move_histories is None:
             move_histories = [[] for _ in positions]
 
@@ -102,12 +68,6 @@ class ReplayBuffer:
             self.add(board, policy, value, history)
 
     def add_game_example(self, example: GameExample) -> None:
-        """
-        Add a single GameExample from self_play.
-
-        Args:
-            example: GameExample object from self_play module
-        """
         internal_example = {
             "fen": example.fen,
             "policy": example.policy,
@@ -122,12 +82,6 @@ class ReplayBuffer:
         return list(self.buffer)
 
     def add_game_examples(self, examples: List[GameExample]) -> None:
-        """
-        Bulk add GameExample objects from self_play.
-
-        Args:
-            examples: List of GameExample objects
-        """
         for example in examples:
             self.add_game_example(example)
 
@@ -137,17 +91,6 @@ class ReplayBuffer:
         weighted: bool = False,
         weights: Optional[List[float]] = None,
     ) -> Dict[str, List]:
-        """
-        Sample a random batch of examples with optional weighting.
-
-        Args:
-            batch_size: Number of examples to sample
-            weighted: If True, use weighted sampling based on provided weights
-            weights: Optional sample weights (must match buffer size if provided)
-
-        Returns:
-            Dictionary with keys: 'boards', 'policies', 'values', 'move_histories'
-        """
         if len(self.buffer) < batch_size:
             batch_size = len(self.buffer)
 

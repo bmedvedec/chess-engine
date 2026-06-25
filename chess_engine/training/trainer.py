@@ -32,18 +32,7 @@ def _count_parameters(model: nn.Module) -> int:
 
 
 class ChessTrainer:
-    """
-    Trainer for supervised learning on chess games.
-
-    Handles:
-    - Training loop with mixed precision
-    - Validation with metrics
-    - Early stopping
-    - Checkpointing
-    - Logging
-    - Learning rate scheduling with warmup
-    - Gradient accumulation
-    """
+    """Supervised training with AMP, warmup scheduler, early stopping, and checkpointing."""
 
     def __init__(
         self,
@@ -61,46 +50,23 @@ class ChessTrainer:
         warmup_epochs: int = 2,
         gradient_accumulation_steps: int = 1,
     ):
-        """
-        Initialize trainer.
-
-        Args:
-            model: Neural network model
-            train_loader: Training data loader
-            val_loader: Validation data loader
-            device: Device to train on (cuda/cpu)
-            learning_rate: Initial learning rate (default: 0.001)
-            checkpoint_dir: Directory to save checkpoints
-            log_dir: Directory for TensorBoard logs
-            use_mixed_precision: Enable automatic mixed precision (default: False)
-            policy_weight: Weight for policy loss (default: 1.0)
-            value_weight: Weight for value loss (default: 1.0)
-            early_stopping_patience: Epochs without improvement before stopping (default: 10)
-            warmup_epochs: Number of warmup epochs (default: 2)
-            gradient_accumulation_steps: Gradient accumulation steps (default: 1)
-        """
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
         self.checkpoint_dir = checkpoint_dir
 
-        # Loss weights
         self.policy_weight = policy_weight
         self.value_weight = value_weight
 
-        # Early stopping
         self.early_stopping_patience = early_stopping_patience
         self.epochs_without_improvement = 0
 
-        # Gradient accumulation
         self.gradient_accumulation_steps = gradient_accumulation_steps
 
-        # Create directories
         os.makedirs(checkpoint_dir, exist_ok=True)
         os.makedirs(log_dir, exist_ok=True)
 
-        # Optimizer with explicit Adam parameters
         self.optimizer = torch.optim.Adam(
             model.parameters(),
             lr=learning_rate,
@@ -109,29 +75,22 @@ class ChessTrainer:
             eps=1e-8,
         )
 
-        # Main scheduler (ReduceLROnPlateau)
         self.scheduler = create_plateau_scheduler(self.optimizer)
 
-        # Warmup scheduler
         self.warmup_epochs = warmup_epochs
         self.warmup_scheduler = create_warmup_scheduler(self.optimizer, warmup_epochs)
 
-        # Flag to track learning rate changes
         self.last_lr = learning_rate
 
-        # Mixed precision training
         self.use_mixed_precision = use_mixed_precision and device.type == "cuda"
         self.scaler = GradScaler("cuda") if self.use_mixed_precision else None
 
-        # TensorBoard writer
         self.writer = SummaryWriter(log_dir)
 
-        # Training state
         self.epoch = 0
         self.global_step = 0
         self.best_val_loss = float("inf")
 
-        # Move encoder for policy targets
         self.move_encoder = MoveEncoder()
 
         print(f"Trainer initialized")
@@ -147,13 +106,6 @@ class ChessTrainer:
         print(f"   Validation batches: {len(val_loader)}")
 
     def save_checkpoint(self, filename: str = "checkpoint.pt", is_best: bool = False):
-        """
-        Save model checkpoint.
-
-        Args:
-            filename: Checkpoint filename
-            is_best: Whether this is the best model so far
-        """
         checkpoint = {
             "epoch": self.epoch,
             "global_step": self.global_step,
@@ -163,7 +115,6 @@ class ChessTrainer:
             "warmup_scheduler_state_dict": self.warmup_scheduler.state_dict(),
             "best_val_loss": self.best_val_loss,
             "epochs_without_improvement": self.epochs_without_improvement,
-            # Save configuration
             "config": {
                 "policy_weight": self.policy_weight,
                 "value_weight": self.value_weight,
@@ -174,7 +125,6 @@ class ChessTrainer:
             },
         }
 
-        # Save scaler state if using mixed precision
         if self.scaler is not None:
             checkpoint["scaler_state_dict"] = self.scaler.state_dict()
 
@@ -195,13 +145,11 @@ class ChessTrainer:
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
 
-        # Load warmup scheduler if available
         if "warmup_scheduler_state_dict" in checkpoint:
             self.warmup_scheduler.load_state_dict(
                 checkpoint["warmup_scheduler_state_dict"]
             )
 
-        # Load scaler if using mixed precision
         if self.scaler is not None and "scaler_state_dict" in checkpoint:
             self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
 
@@ -209,7 +157,6 @@ class ChessTrainer:
         self.global_step = checkpoint["global_step"]
         self.best_val_loss = checkpoint["best_val_loss"]
 
-        # Load early stopping state if available
         if "epochs_without_improvement" in checkpoint:
             self.epochs_without_improvement = checkpoint["epochs_without_improvement"]
 
@@ -218,12 +165,6 @@ class ChessTrainer:
             print(f"   Configuration: {checkpoint['config']}")
 
     def train(self, num_epochs: int):
-        """
-        Main training loop.
-
-        Args:
-            num_epochs: Number of epochs to train
-        """
         print("\n" + "=" * 80)
         print("STARTING TRAINING")
         print("=" * 80)
@@ -237,7 +178,6 @@ class ChessTrainer:
             print(f"Epoch {epoch + 1}/{num_epochs}")
             print(f"{'='*80}")
 
-            # Train
             train_losses, self.global_step = train_epoch(
                 model=self.model,
                 train_loader=self.train_loader,
@@ -262,7 +202,6 @@ class ChessTrainer:
             print(f"   Top-5 accuracy: {train_losses['policy_top5_acc']:.3f}")
             print(f"   Value MAE: {train_losses['value_mae']:.4f}")
 
-            # Validate
             val_losses = validate(
                 model=self.model,
                 val_loader=self.val_loader,
@@ -282,18 +221,14 @@ class ChessTrainer:
             print(f"   Top-5 accuracy: {val_losses['policy_top5_acc']:.3f}")
             print(f"   Value MAE: {val_losses['value_mae']:.4f}")
 
-            # Learning rate scheduling
             if epoch < self.warmup_epochs:
-                # Use warmup scheduler
                 self.warmup_scheduler.step()
                 current_lr = self.optimizer.param_groups[0]["lr"]
                 print(f"\nWarmup phase - Learning rate: {current_lr:.6f}")
             else:
-                # Use main scheduler
                 self.scheduler.step(val_losses["total"])
                 current_lr = self.optimizer.param_groups[0]["lr"]
 
-                # Check if learning rate changed
                 if current_lr != self.last_lr:
                     print(
                         f"\nLearning rate reduced: {self.last_lr:.6f} -> {current_lr:.6f}"
@@ -302,10 +237,8 @@ class ChessTrainer:
                 else:
                     print(f"\nLearning rate: {current_lr:.6f}")
 
-            # Save checkpoint
             self.save_checkpoint(f"checkpoint_epoch_{epoch + 1}.pt")
 
-            # Check for improvement (early stopping)
             if val_losses["total"] < self.best_val_loss:
                 print(
                     f"New best validation loss: {self.best_val_loss:.4f} -> {val_losses['total']:.4f}"
@@ -317,7 +250,6 @@ class ChessTrainer:
                 self.epochs_without_improvement += 1
                 print(f"No improvement for {self.epochs_without_improvement} epoch(s)")
 
-                # Early stopping check
                 if self.epochs_without_improvement >= self.early_stopping_patience:
                     print(f"\nEarly stopping triggered after {epoch + 1} epochs")
                     print(
@@ -326,7 +258,6 @@ class ChessTrainer:
                     print(f"   Best validation loss: {self.best_val_loss:.4f}")
                     break
 
-            # Time estimate
             elapsed = time.time() - start_time
             avg_epoch_time = elapsed / (epoch + 1)
             remaining_epochs = num_epochs - (epoch + 1)

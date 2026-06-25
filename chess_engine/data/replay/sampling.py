@@ -1,8 +1,8 @@
 """
 REPLAY BUFFER - Sampling Utilities
 
-This module is a thin helper; main sampling logic lives in buffer.py and prioritized.py.
-Kept for compatibility with ChatGPT's import structure.
+Thin helper; main sampling logic lives in buffer.py and prioritized.py.
+Kept for backward-compatible imports.
 """
 
 from typing import List

@@ -1,12 +1,8 @@
 """
-CHAPTER 13: HYPERPARAMETER CONFIGURATION
-Centralized Configuration System for Chess Engine Tuning
+HYPERPARAMETER CONFIGURATION
 
-This module provides:
-- Unified configuration dataclass with all hyperparameters
-- Parameter ranges for systematic search
-- Configuration validation and serialization
-- Preset configurations for different use cases
+Centralized configuration system: dataclasses for all hyperparameters,
+parameter ranges for systematic search, validation, serialization, and presets.
 """
 
 import json

@@ -1,18 +1,4 @@
-"""
-EVALUATION & BENCHMARKING
-Complete Implementation
-
-This module provides comprehensive evaluation and benchmarking capabilities for the chess engine.
-
-Features:
-- Automated game playing against baselines (random, stockfish)
-- Win/Loss/Draw statistics
-- ELO rating estimation
-- Game phase analysis (opening, middle, endgame)
-- Weakness detection
-- Performance visualization
-- Comprehensive reporting
-"""
+"""Evaluation harness: plays games against baselines, estimates ELO, and reports results."""
 
 import os
 import sys
@@ -43,7 +29,7 @@ try:
     CHESS_ENGINE_AVAILABLE = True
 except ImportError:
     CHESS_ENGINE_AVAILABLE = False
-    print("⚠️  chess.engine not available - Stockfish support disabled")
+    print("chess.engine not available - Stockfish support disabled")
 
 # Try to import plotting libraries
 try:
@@ -53,12 +39,14 @@ try:
     PLOTTING_AVAILABLE = True
 except ImportError:
     PLOTTING_AVAILABLE = False
-    print("⚠️  Matplotlib not available - visualizations disabled")
+    print("Matplotlib not available - visualizations disabled")
 
 # Chess engine imports
-from chess_engine.models.hybrid_model import HybridChessNet
+from chess_engine.models.hybrid.config import HybridModelConfig
+from chess_engine.models.hybrid.hybrid_net import HybridChessNet
 from chess_engine.utils.board_encoder import BoardEncoder
-from chess_engine.utils.move_encoder import MoveEncoder, MoveHistory
+from chess_engine.utils.move_encoder import MoveEncoder
+from chess_engine.utils.move_history import MoveHistory
 
 # Try to import MCTS
 try:
@@ -68,11 +56,6 @@ try:
 except ImportError:
     MCTS_AVAILABLE = False
     print("⚠️  MCTS not available - will use policy-only mode")
-
-
-# =============================================================================
-# ENUMS & DATA CLASSES
-# =============================================================================
 
 
 class GamePhase(Enum):
@@ -162,11 +145,6 @@ class EvaluationResults:
     games: List[GameRecord] = field(default_factory=list)
 
 
-# =============================================================================
-# OPPONENT PLAYERS
-# =============================================================================
-
-
 class OpponentPlayer:
     """Base class for opponent players"""
 
@@ -175,7 +153,6 @@ class OpponentPlayer:
         self.base_elo = 0  # Estimated ELO of this opponent
 
     def select_move(self, board: chess.Board) -> chess.Move:
-        """Select a move for the given position"""
         raise NotImplementedError
 
 
@@ -187,7 +164,6 @@ class RandomPlayer(OpponentPlayer):
         self.base_elo = 400  # Very weak baseline
 
     def select_move(self, board: chess.Board) -> chess.Move:
-        """Select random legal move"""
         legal_moves = list(board.legal_moves)
         return random.choice(legal_moves)
 
@@ -196,55 +172,36 @@ class StockfishPlayer(OpponentPlayer):
     """Plays using Stockfish engine"""
 
     def __init__(self, level: int = 1, time_limit: float = 0.1):
-        """
-        Initialize Stockfish player
-
-        Args:
-            level: Skill level 0-20 (0=weakest, 20=strongest)
-            time_limit: Time limit per move in seconds
-        """
         super().__init__(f"Stockfish-{level}")
         self.level = level
         self.time_limit = time_limit
-
-        # Estimated ELO based on level (approximate)
-        # Level 0: ~800, Level 10: ~1800, Level 20: ~3000
         self.base_elo = 800 + (level * 110)
 
-        # Check if chess.engine is available
         if not CHESS_ENGINE_AVAILABLE:
             self.engine_available = False
-            print(
-                "⚠️  chess.engine module not available - install python-chess with engine support"
-            )
+            print("chess.engine module not available - install python-chess with engine support")
             return
 
-        # Try to find and initialize stockfish
         stockfish_path = self._find_stockfish()
         if stockfish_path:
             try:
                 self.engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
                 self.engine.configure({"Skill Level": level})
                 self.engine_available = True
-                print(f"✅ Stockfish initialized at level {level}")
+                print(f"Stockfish initialized at level {level}")
             except Exception as e:
                 self.engine_available = False
-                print(f"⚠️  Failed to initialize Stockfish: {e}")
+                print(f"Failed to initialize Stockfish: {e}")
         else:
             self.engine_available = False
-            print("⚠️  Stockfish executable not found")
+            print("Stockfish executable not found")
 
     def _find_stockfish(self) -> Optional[str]:
-        """Try to find stockfish executable"""
-        # Possible paths (Linux, macOS, Windows)
         possible_paths = [
-            # Linux
             "/usr/games/stockfish",
             "/usr/bin/stockfish",
             "/usr/local/bin/stockfish",
-            # macOS
             "/opt/homebrew/bin/stockfish",
-            # Windows
             r"C:\Program Files\Stockfish\stockfish.exe",
             r"C:\Program Files\Stockfish\stockfish-windows-x86-64-avx2.exe",
             r"C:\stockfish\stockfish.exe",
@@ -257,7 +214,6 @@ class StockfishPlayer(OpponentPlayer):
         for path in possible_paths:
             if os.path.exists(path):
                 return path
-            # Try without explicit path (in PATH)
             try:
                 import subprocess
 
@@ -272,31 +228,22 @@ class StockfishPlayer(OpponentPlayer):
         return None
 
     def select_move(self, board: chess.Board) -> chess.Move:
-        """Select move using Stockfish"""
         if not self.engine_available:
-            # Fallback to random
             return RandomPlayer().select_move(board)
 
         try:
             result = self.engine.play(board, chess.engine.Limit(time=self.time_limit))
             if result.move is None:
-                # Shouldn't happen with legal position, but handle it
-                print("⚠️  Stockfish returned None, using random move")
+                print("Stockfish returned None, using random move")
                 return RandomPlayer().select_move(board)
             return result.move
         except Exception as e:
-            print(f"⚠️  Stockfish error: {e}, using random move")
+            print(f"Stockfish error: {e}, using random move")
             return RandomPlayer().select_move(board)
 
     def close(self):
-        """Close the engine"""
         if hasattr(self, "engine"):
             self.engine.quit()
-
-
-# =============================================================================
-# ENGINE EVALUATOR
-# =============================================================================
 
 
 class ChessEngineEvaluator:
@@ -312,31 +259,18 @@ class ChessEngineEvaluator:
         mcts_simulations: int = 100,
         verbose: bool = True,
     ):
-        """
-        Initialize evaluator
-
-        Args:
-            model_path: Path to model checkpoint
-            device: Device to run on
-            use_mcts: Whether to use MCTS for move selection
-            mcts_simulations: Number of MCTS simulations
-            verbose: Print progress
-        """
         self.model_path = model_path
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.use_mcts = use_mcts and MCTS_AVAILABLE
         self.mcts_simulations = mcts_simulations
         self.verbose = verbose
 
-        # Load model
         self._load_model()
 
-        # Initialize encoders
         self.board_encoder = BoardEncoder()
         self.move_encoder = MoveEncoder()
         self.move_history = MoveHistory()
 
-        # Results
         self.results = EvaluationResults(
             model_name=Path(model_path).stem,
             timestamp=datetime.now().isoformat(),
@@ -344,25 +278,21 @@ class ChessEngineEvaluator:
         )
 
     def _load_model(self):
-        """Load the chess model"""
         if self.verbose:
             print(f"Loading model from {self.model_path}...")
 
         checkpoint = torch.load(self.model_path, map_location=self.device)
 
-        # Extract state dict
         if "model_state_dict" in checkpoint:
             state_dict = checkpoint["model_state_dict"]
         else:
             state_dict = checkpoint
 
-        # Auto-detect architecture
         has_rnn = any(
             key.startswith("rnn.") or key.startswith("fusion.")
             for key in state_dict.keys()
         )
 
-        # Detect CNN blocks
         block_keys = [
             k for k in state_dict.keys() if k.startswith("cnn.residual_blocks.")
         ]
@@ -372,32 +302,32 @@ class ChessEngineEvaluator:
         else:
             cnn_blocks = 10
 
-        # Detect RNN parameters from checkpoint if RNN is present
         rnn_hidden_size = 256  # default
         rnn_layers = 2  # default
         rnn_attention = False  # default
         fusion_type = "gated"  # default
 
+        rnn_bidirectional = False  # default
+
         if has_rnn:
-            # Try to detect RNN hidden size from weight shapes
+            # supports both "rnn.lstm.*" (old) and "rnn.core.lstm.*" (ChessRNN wrapper)
             for key in state_dict.keys():
-                if "rnn.lstm.weight_ih_l0" in key:
+                if "lstm.weight_ih_l0" in key and "_reverse" not in key:
                     weight_shape = state_dict[key].shape
                     rnn_hidden_size = weight_shape[0] // 4  # LSTM has 4 gates
                     break
 
-            # Detect number of RNN layers
             rnn_layer_keys = [
-                k for k in state_dict.keys() if k.startswith("rnn.lstm.weight_ih_l")
+                k for k in state_dict.keys()
+                if "lstm.weight_ih_l" in k and "_reverse" not in k
             ]
             if rnn_layer_keys:
-                max_layer = max(int(k.split("_l")[1][0]) for k in rnn_layer_keys)
+                max_layer = max(int(k.split("weight_ih_l")[1][0]) for k in rnn_layer_keys)
                 rnn_layers = max_layer + 1
 
-            # Detect attention
+            rnn_bidirectional = any("_reverse" in key for key in state_dict.keys())
             rnn_attention = any("attention" in key for key in state_dict.keys())
 
-            # Detect fusion type (check for gated fusion layers)
             if any("fusion.gate" in key for key in state_dict.keys()):
                 fusion_type = "gated"
             elif any("fusion.attention" in key for key in state_dict.keys()):
@@ -405,15 +335,16 @@ class ChessEngineEvaluator:
             else:
                 fusion_type = "concat"
 
-        # Create model with detected parameters
-        self.model = HybridChessNet(
+        model_config = HybridModelConfig(
             cnn_residual_blocks=cnn_blocks,
             use_rnn=has_rnn,
             rnn_hidden_size=rnn_hidden_size if has_rnn else 256,
             rnn_num_layers=rnn_layers if has_rnn else 2,
             rnn_use_attention=rnn_attention if has_rnn else False,
+            rnn_bidirectional=rnn_bidirectional if has_rnn else False,
             fusion_type=fusion_type if has_rnn else "gated",
         )
+        self.model = HybridChessNet(model_config)
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
         self.model.eval()
@@ -423,64 +354,47 @@ class ChessEngineEvaluator:
         if self.verbose:
             if has_rnn:
                 print(
-                    f"✅ Model loaded (Hybrid CNN-RNN, {cnn_blocks} CNN blocks, {rnn_layers} RNN layers, hidden={rnn_hidden_size}, attention={rnn_attention}, fusion={fusion_type})"
+                    f"Model loaded (Hybrid CNN-RNN, {cnn_blocks} CNN blocks, {rnn_layers} RNN layers, hidden={rnn_hidden_size}, bidirectional={rnn_bidirectional}, attention={rnn_attention}, fusion={fusion_type})"
                 )
             else:
-                print(f"✅ Model loaded (CNN-only, {cnn_blocks} blocks)")
+                print(f"Model loaded (CNN-only, {cnn_blocks} blocks)")
 
             if self.use_mcts:
-                print(f"✅ MCTS enabled ({self.mcts_simulations} simulations)")
+                print(f"MCTS enabled ({self.mcts_simulations} simulations)")
             else:
-                print("ℹ️  Using policy-only mode")
+                print("Using policy-only mode")
 
     def select_move(self, board: chess.Board) -> chess.Move:
-        """
-        Select best move for current position
-
-        Args:
-            board: Current board position
-
-        Returns:
-            Selected move
-        """
         if self.use_mcts:
             return self._select_move_mcts(board)
         else:
             return self._select_move_policy(board)
 
     def _select_move_policy(self, board: chess.Board) -> chess.Move:
-        """Select move using policy network only"""
-        # Encode board
         board_tensor = (
             self.board_encoder.board_to_tensor(board).unsqueeze(0).to(self.device)
         )
 
-        # Encode move history if using RNN
         if self.has_rnn:
             move_history = self.move_history.encode_game_history(board, pad=True)
             move_history = move_history.unsqueeze(0).to(self.device)
         else:
             move_history = None
 
-        # Get policy
         with torch.no_grad():
             if self.has_rnn and move_history is not None:
-                # Model with RNN may return 2 or 3 values
                 model_output = self.model(board_tensor, move_history)
-                policy_logits = model_output[0]  # First element is always policy
+                policy_logits = model_output[0]
             else:
-                # CNN-only model may return 2 or 3 values
                 model_output = self.model(board_tensor)
-                policy_logits = model_output[0]  # First element is always policy
+                policy_logits = model_output[0]
 
-        # Select best legal move
         policy_logits = policy_logits.squeeze(0).cpu()
         move, _ = self.move_encoder.get_best_move(policy_logits, board)
 
         return move
 
     def _select_move_mcts(self, board: chess.Board) -> chess.Move:
-        """Select move using MCTS"""
         mcts = MCTS(
             model=self.model,
             board_encoder=self.board_encoder,
@@ -490,8 +404,7 @@ class ChessEngineEvaluator:
             num_simulations=self.mcts_simulations,
         )
 
-        # MCTS search returns tuple of (move, stats)
-        move, _ = mcts.search(board, return_stats=False)
+        move, _ = mcts.search(board, return_stats=True)
 
         return move
 
@@ -502,29 +415,15 @@ class ChessEngineEvaluator:
         max_moves: int = 200,
         game_id: int = 0,
     ) -> GameRecord:
-        """
-        Play a single game against an opponent
-
-        Args:
-            opponent: Opponent player
-            engine_color: Color for the engine
-            max_moves: Maximum number of moves before draw
-            game_id: Game identifier
-
-        Returns:
-            GameRecord with game details
-        """
         board = chess.Board()
         start_time = time.time()
         moves_played = 0
 
-        # Phase tracking
         opening_moves = 0
         middle_moves = 0
         endgame_moves = 0
 
         while not board.is_game_over() and moves_played < max_moves:
-            # Determine game phase
             if moves_played < 10:
                 phase = GamePhase.OPENING
                 opening_moves += 1
@@ -535,14 +434,12 @@ class ChessEngineEvaluator:
                 phase = GamePhase.ENDGAME
                 endgame_moves += 1
 
-            # Select move
             if board.turn == engine_color:
                 try:
                     move = self.select_move(board)
                 except Exception as e:
                     if self.verbose:
-                        print(f"⚠️  Engine error: {e}")
-                    # Fallback to random
+                        print(f"Engine error: {e}")
                     move = random.choice(list(board.legal_moves))
             else:
                 move = opponent.select_move(board)
@@ -550,7 +447,6 @@ class ChessEngineEvaluator:
             board.push(move)
             moves_played += 1
 
-        # Determine result
         time_taken = time.time() - start_time
 
         if board.is_checkmate():
@@ -577,7 +473,6 @@ class ChessEngineEvaluator:
             result = GameResult.DRAW
             termination = "other"
 
-        # Create PGN
         game = chess.pgn.Game()
         game.headers["Event"] = "Evaluation"
         game.headers["White"] = (
@@ -616,20 +511,9 @@ class ChessEngineEvaluator:
         games_per_opponent: int = 50,
         alternate_colors: bool = True,
     ) -> EvaluationResults:
-        """
-        Run comprehensive evaluation
-
-        Args:
-            opponents: List of opponent players
-            games_per_opponent: Number of games against each opponent
-            alternate_colors: Alternate engine color
-
-        Returns:
-            EvaluationResults
-        """
         if self.verbose:
             print("\n" + "=" * 70)
-            print("🎯 STARTING EVALUATION")
+            print("STARTING EVALUATION")
             print("=" * 70)
             print(f"Model: {self.model_path}")
             print(f"Opponents: {[opp.name for opp in opponents]}")
@@ -642,7 +526,6 @@ class ChessEngineEvaluator:
 
         with tqdm(total=total_games, disable=not self.verbose) as pbar:
             for opponent in opponents:
-                # Initialize opponent stats
                 if opponent.name not in self.results.results_by_opponent:
                     self.results.results_by_opponent[opponent.name] = {
                         "wins": 0,
@@ -651,18 +534,15 @@ class ChessEngineEvaluator:
                     }
 
                 for i in range(games_per_opponent):
-                    # Alternate colors
                     if alternate_colors:
                         engine_color = chess.WHITE if i % 2 == 0 else chess.BLACK
                     else:
                         engine_color = chess.WHITE
 
-                    # Play game
                     game_record = self.play_game(
                         opponent, engine_color, game_id=game_id
                     )
 
-                    # Update results
                     self.results.games.append(game_record)
                     self.results.total_games += 1
 
@@ -697,39 +577,27 @@ class ChessEngineEvaluator:
 
                     game_id += 1
 
-        # Calculate aggregate statistics
         self._calculate_statistics()
-
-        # Estimate ELO
         self._estimate_elo(opponents)
-
-        # Analyze weaknesses
         self._analyze_weaknesses()
 
         if self.verbose:
-            print("\n✅ Evaluation complete!")
+            print("\nEvaluation complete.")
 
         return self.results
 
     def _calculate_statistics(self):
-        """Calculate aggregate statistics"""
         if not self.results.games:
             return
 
-        # Average game length (convert numpy type to float)
         self.results.avg_game_length = float(
             np.mean([g.num_moves for g in self.results.games])
         )
-
-        # Average time per game (convert numpy type to float)
         self.results.avg_time_per_game = float(
             np.mean([g.time_taken for g in self.results.games])
         )
-
-        # Total time
         self.results.total_time = sum(g.time_taken for g in self.results.games)
 
-        # Phase statistics
         for phase in ["opening", "middle", "endgame"]:
             phase_games = [
                 g for g in self.results.games if getattr(g, f"{phase}_moves") > 0
@@ -740,7 +608,6 @@ class ChessEngineEvaluator:
                 losses = sum(1 for g in phase_games if g.result == GameResult.LOSS)
                 draws = sum(1 for g in phase_games if g.result == GameResult.DRAW)
 
-                # Ensure all values are float, not numpy types
                 total = len(phase_games)
                 avg_moves_value = float(
                     np.mean([getattr(g, f"{phase}_moves") for g in phase_games])
@@ -755,17 +622,9 @@ class ChessEngineEvaluator:
                 }
 
     def _estimate_elo(self, opponents: Sequence[OpponentPlayer]):
-        """
-        Estimate ELO rating using performance against known opponents
-
-        Uses the formula:
-        Performance Rating = Opponent Rating + 400 * log10(W / L)
-        where W = wins, L = losses (draws count as 0.5)
-        """
+        """Performance Rating = Opponent Rating + 400 * log10(W / L), draws count as 0.5."""
         if not self.results.games:
             return
-
-        # Calculate expected score against each opponent
         performance_ratings = []
 
         for opponent in opponents:
@@ -778,20 +637,14 @@ class ChessEngineEvaluator:
             if total == 0:
                 continue
 
-            # Score (wins + 0.5 * draws)
             score = wins + 0.5 * draws
             score_percentage = score / total
 
-            # Performance rating formula
-            # If score is 100%, use a high performance rating
             if score_percentage >= 0.99:
                 performance = opponent.base_elo + 400
             elif score_percentage <= 0.01:
                 performance = opponent.base_elo - 400
             else:
-                # Use standard formula
-                # Performance = Opponent_Rating + 400 * log10(W/L)
-                # where W/L is calculated from score percentage
                 try:
                     performance = opponent.base_elo + 400 * math.log10(
                         score_percentage / (1 - score_percentage)
@@ -802,10 +655,8 @@ class ChessEngineEvaluator:
             performance_ratings.append(performance)
 
         if performance_ratings:
-            # Average performance rating (convert numpy type to float)
             self.results.estimated_elo = float(np.mean(performance_ratings))
 
-            # Confidence interval (rough estimate)
             if len(performance_ratings) > 1:
                 std = float(np.std(performance_ratings))
                 self.results.elo_confidence_interval = (
@@ -819,9 +670,7 @@ class ChessEngineEvaluator:
                 )
 
     def _analyze_weaknesses(self):
-        """Analyze common weaknesses"""
-        # Identify weak phases
-        weak_threshold = 0.4  # < 40% win rate
+        weak_threshold = 0.4
 
         for phase, stats in self.results.phase_statistics.items():
             if stats["win_rate"] < weak_threshold:
@@ -829,7 +678,6 @@ class ChessEngineEvaluator:
                     f"{phase.capitalize()} (win rate: {stats['win_rate']:.1%})"
                 )
 
-        # Identify color weakness
         total_white = (
             self.results.wins_as_white
             + self.results.losses_as_white
@@ -855,10 +703,8 @@ class ChessEngineEvaluator:
                     f"Weak as Black (win rate: {black_win_rate:.1%})"
                 )
 
-        # Analyze termination types
         terminations = Counter(g.termination for g in self.results.games)
 
-        # Check for pattern of losing by checkmate
         losses_by_checkmate = sum(
             1
             for g in self.results.games
@@ -870,7 +716,6 @@ class ChessEngineEvaluator:
             )
 
     def print_summary(self):
-        """Print evaluation summary"""
         print("\n" + "=" * 70)
         print("EVALUATION SUMMARY")
         print("=" * 70)
@@ -878,7 +723,6 @@ class ChessEngineEvaluator:
         print(f"Total Games: {self.results.total_games}")
         print()
 
-        # Overall results
         total = self.results.wins + self.results.losses + self.results.draws
         win_rate = self.results.wins / total if total > 0 else 0
         loss_rate = self.results.losses / total if total > 0 else 0
@@ -890,7 +734,6 @@ class ChessEngineEvaluator:
         print(f"  Draws:  {self.results.draws:3d} ({draw_rate:.1%})")
         print()
 
-        # By opponent
         print("Performance by Opponent:")
         for opponent_name, stats in self.results.results_by_opponent.items():
             total = stats["wins"] + stats["losses"] + stats["draws"]
@@ -900,7 +743,6 @@ class ChessEngineEvaluator:
             )
         print()
 
-        # By color
         print("Performance by Color:")
         total_white = (
             self.results.wins_as_white
@@ -926,7 +768,6 @@ class ChessEngineEvaluator:
             )
         print()
 
-        # ELO estimation
         if self.results.estimated_elo:
             print("ELO Estimation:")
             print(f"  Estimated ELO: {self.results.estimated_elo:.0f}")
@@ -935,14 +776,12 @@ class ChessEngineEvaluator:
                 print(f"  95% Confidence: {low:.0f} - {high:.0f}")
             print()
 
-        # Performance metrics
         print("Performance Metrics:")
         print(f"  Avg Game Length: {self.results.avg_game_length:.1f} moves")
         print(f"  Avg Time/Game:   {self.results.avg_time_per_game:.2f}s")
         print(f"  Total Time:      {self.results.total_time:.1f}s")
         print()
 
-        # Phase analysis
         if self.results.phase_statistics:
             print("Phase Analysis:")
             for phase, stats in self.results.phase_statistics.items():
@@ -951,7 +790,6 @@ class ChessEngineEvaluator:
                 )
             print()
 
-        # Weaknesses
         if self.results.weak_phases or self.results.common_errors:
             print("  Identified Weaknesses:")
             for weakness in self.results.weak_phases:
@@ -963,21 +801,18 @@ class ChessEngineEvaluator:
         print("=" * 70)
 
     def save_results(self, output_dir: str = "evaluation_results"):
-        """Save evaluation results to files"""
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_name = f"{self.results.model_name}_{timestamp}"
 
-        # Save JSON summary
         json_path = output_path / f"{base_name}_summary.json"
         with open(json_path, "w") as f:
             json.dump(asdict(self.results), f, indent=2, default=str)
 
-        print(f"💾 Results saved to {json_path}")
+        print(f"Results saved to {json_path}")
 
-        # Save PGN games
         pgn_path = output_path / f"{base_name}_games.pgn"
         with open(pgn_path, "w") as f:
             for game in self.results.games:
@@ -985,12 +820,10 @@ class ChessEngineEvaluator:
                     f.write(game.pgn)
                     f.write("\n\n")
 
-        print(f"💾 Games saved to {pgn_path}")
+        print(f"Games saved to {pgn_path}")
 
-        # Save text report
         report_path = output_path / f"{base_name}_report.txt"
         with open(report_path, "w") as f:
-            # Redirect print to file
             import sys
 
             old_stdout = sys.stdout
@@ -998,14 +831,13 @@ class ChessEngineEvaluator:
             self.print_summary()
             sys.stdout = old_stdout
 
-        print(f"💾 Report saved to {report_path}")
+        print(f"Report saved to {report_path}")
 
         return output_path
 
     def plot_results(self, output_dir: str = "evaluation_results"):
-        """Generate visualization plots"""
         if not PLOTTING_AVAILABLE:
-            print("⚠️  Plotting not available (install matplotlib and seaborn)")
+            print("Plotting not available (install matplotlib and seaborn)")
             return
 
         output_path = Path(output_dir)
@@ -1014,13 +846,10 @@ class ChessEngineEvaluator:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_name = f"{self.results.model_name}_{timestamp}"
 
-        # Set style
         sns.set_style("whitegrid")
 
-        # Create figure with subplots
         fig = plt.figure(figsize=(16, 10))
 
-        # 1. Overall win/loss/draw pie chart
         ax1 = plt.subplot(2, 3, 1)
         sizes = [self.results.wins, self.results.losses, self.results.draws]
         labels = [
@@ -1032,7 +861,6 @@ class ChessEngineEvaluator:
         ax1.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
         ax1.set_title("Overall Results")
 
-        # 2. Performance by opponent
         ax2 = plt.subplot(2, 3, 2)
         opponents = list(self.results.results_by_opponent.keys())
         win_rates = [
@@ -1045,7 +873,6 @@ class ChessEngineEvaluator:
         ax2.set_title("Win Rate by Opponent")
         ax2.set_xlim(0, 1)
 
-        # 3. Performance by color
         ax3 = plt.subplot(2, 3, 3)
         colors_data = ["White", "Black"]
         wins = [self.results.wins_as_white, self.results.wins_as_black]
@@ -1065,7 +892,6 @@ class ChessEngineEvaluator:
         ax3.set_xticklabels(colors_data)
         ax3.legend()
 
-        # 4. Phase performance
         ax4 = plt.subplot(2, 3, 4)
         phases = list(self.results.phase_statistics.keys())
         phase_win_rates = [
@@ -1076,7 +902,6 @@ class ChessEngineEvaluator:
         ax4.set_title("Win Rate by Game Phase")
         ax4.set_ylim(0, 1)
 
-        # 5. Game length distribution
         ax5 = plt.subplot(2, 3, 5)
         game_lengths = [g.num_moves for g in self.results.games]
         ax5.hist(game_lengths, bins=20, color="#34495e", edgecolor="black")
@@ -1091,7 +916,6 @@ class ChessEngineEvaluator:
         )
         ax5.legend()
 
-        # 6. ELO estimation
         ax6 = plt.subplot(2, 3, 6)
         if self.results.estimated_elo:
             elo = self.results.estimated_elo
@@ -1115,17 +939,11 @@ class ChessEngineEvaluator:
 
         plt.tight_layout()
 
-        # Save
         plot_path = output_path / f"{base_name}_plots.png"
         plt.savefig(plot_path, dpi=150, bbox_inches="tight")
-        print(f"📊 Plots saved to {plot_path}")
+        print(f"Plots saved to {plot_path}")
 
         plt.close()
-
-
-# =============================================================================
-# MODEL COMPARISON
-# =============================================================================
 
 
 def compare_models(
@@ -1134,23 +952,13 @@ def compare_models(
     device: str = "cuda",
     output_dir: str = "evaluation_results",
 ):
-    """
-    Compare multiple models against each other
-
-    Args:
-        model_paths: List of model checkpoint paths
-        games_per_model: Games to play between each pair
-        device: Device to run on
-        output_dir: Output directory
-    """
     print("\n" + "=" * 70)
-    print("🔬 MODEL COMPARISON")
+    print("MODEL COMPARISON")
     print("=" * 70)
     print(f"Models: {len(model_paths)}")
     print(f"Games per matchup: {games_per_model}")
     print("=" * 70 + "\n")
 
-    # Load all models
     evaluators = []
     for path in model_paths:
         evaluator = ChessEngineEvaluator(
@@ -1158,10 +966,8 @@ def compare_models(
         )
         evaluators.append(evaluator)
 
-    # Create comparison matrix
     results_matrix = np.zeros((len(model_paths), len(model_paths)))
 
-    # Play round-robin
     for i, eval1 in enumerate(evaluators):
         for j, eval2 in enumerate(evaluators):
             if i == j:
@@ -1171,7 +977,6 @@ def compare_models(
 
             wins = 0
             for game_num in range(games_per_model):
-                # Alternate colors
                 engine_color = chess.WHITE if game_num % 2 == 0 else chess.BLACK
 
                 board = chess.Board()
@@ -1182,7 +987,6 @@ def compare_models(
                         move = eval2.select_move(board)
                     board.push(move)
 
-                # Determine winner
                 if board.is_checkmate():
                     winner = not board.turn
                     if winner == engine_color:
@@ -1192,19 +996,16 @@ def compare_models(
             win_rate = wins / games_per_model
             print(f"  Score: {wins}/{games_per_model} ({win_rate:.1%})")
 
-    # Print comparison table
     print("\n" + "=" * 70)
     print("COMPARISON MATRIX (row vs column)")
     print("=" * 70)
 
-    # Header
     print(f"{'':20s}", end="")
     for path in model_paths:
         name = Path(path).stem[:15]
         print(f"{name:>15s}", end="")
     print()
 
-    # Rows
     for i, path in enumerate(model_paths):
         name = Path(path).stem[:20]
         print(f"{name:20s}", end="")
@@ -1217,11 +1018,6 @@ def compare_models(
         print()
 
     print("=" * 70)
-
-
-# =============================================================================
-# MAIN CLI
-# =============================================================================
 
 
 def main():
@@ -1244,12 +1040,10 @@ Examples:
         """,
     )
 
-    # Model selection
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--model", type=str, help="Path to model checkpoint")
     group.add_argument("--compare", nargs="+", help="Compare multiple models")
 
-    # Evaluation settings
     parser.add_argument(
         "--games",
         type=int,
@@ -1270,7 +1064,6 @@ Examples:
         help="Stockfish skill level 0-20 (default: 1)",
     )
 
-    # Engine settings
     parser.add_argument(
         "--mcts", action="store_true", help="Use MCTS for move selection"
     )
@@ -1288,7 +1081,6 @@ Examples:
         help="Device to use",
     )
 
-    # Output settings
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -1302,7 +1094,6 @@ Examples:
 
     args = parser.parse_args()
 
-    # Comparison mode
     if args.compare:
         compare_models(
             args.compare,
@@ -1312,7 +1103,6 @@ Examples:
         )
         return
 
-    # Single model evaluation
     evaluator = ChessEngineEvaluator(
         args.model,
         device=args.device,
@@ -1321,7 +1111,6 @@ Examples:
         verbose=not args.quiet,
     )
 
-    # Create opponents
     opponents = []
     for opp_name in args.opponents:
         if opp_name == "random":
@@ -1329,20 +1118,16 @@ Examples:
         elif opp_name == "stockfish":
             opponents.append(StockfishPlayer(level=args.stockfish_level))
 
-    # Run evaluation
     results = evaluator.evaluate(opponents, games_per_opponent=args.games)
 
-    # Print summary
     evaluator.print_summary()
 
-    # Save results
     output_path = evaluator.save_results(args.output_dir)
 
-    # Generate plots
     if not args.no_plots and PLOTTING_AVAILABLE:
         evaluator.plot_results(args.output_dir)
 
-    print(f"\n✅ Evaluation complete! Results saved to {output_path}")
+    print(f"\nEvaluation complete. Results saved to {output_path}")
 
 
 if __name__ == "__main__":

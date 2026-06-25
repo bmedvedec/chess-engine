@@ -1,13 +1,8 @@
 """
-CHAPTER 13: COMPARISON AND REPORTING
-Tools for Analyzing and Comparing Hyperparameter Experiments
+COMPARISON AND REPORTING
 
-This module provides:
-- Side-by-side experiment comparison
-- Statistical analysis of results
-- Report generation in multiple formats
-- Performance visualization
-- Best configuration extraction
+Tools for analyzing and comparing hyperparameter experiments: side-by-side
+comparison, statistical analysis, multi-format report generation, and visualization.
 """
 
 import json
@@ -51,15 +46,7 @@ class ComparisonResult:
 
 
 class TuningAnalyzer:
-    """
-    Analyzes and compares hyperparameter tuning experiments.
-
-    Features:
-    - Statistical comparison of experiments
-    - Parameter importance analysis
-    - Best configuration extraction
-    - Visualization generation
-    """
+    """Analyzes and compares hyperparameter tuning experiments."""
 
     def __init__(self, tracker: ExperimentTracker):
         """
@@ -183,7 +170,7 @@ class TuningAnalyzer:
         for exp_id, data in metrics.items():
             if data["std"] > 0.2 * abs(data["mean"]):
                 recommendations.append(
-                    f"⚠️ {data['name']}: High variance (std={data['std']:.2f}). Consider more trials."
+                    f"{data['name']}: High variance (std={data['std']:.2f}). Consider more trials."
                 )
 
         # Check for significant differences
@@ -360,15 +347,7 @@ class TuningAnalyzer:
 
 
 class ReportGenerator:
-    """
-    Generates comprehensive reports from tuning experiments.
-
-    Supports multiple output formats:
-    - Text report
-    - Markdown
-    - JSON summary
-    - HTML (with charts)
-    """
+    """Generates text, Markdown, JSON, and HTML reports from tuning experiments."""
 
     def __init__(self, tracker: ExperimentTracker):
         """Initialize with experiment tracker"""
@@ -452,7 +431,7 @@ class ReportGenerator:
         if output_path:
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(report)
-            print(f"📄 Report saved: {output_path}")
+            print(f"Report saved: {output_path}")
 
         return report
 
@@ -505,7 +484,7 @@ class ReportGenerator:
         if output_path:
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(report)
-            print(f"📄 Markdown report saved: {output_path}")
+            print(f"Markdown report saved: {output_path}")
 
         return report
 
@@ -532,7 +511,7 @@ class ReportGenerator:
         if output_path:
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(summary, f, indent=2)
-            print(f"📄 JSON summary saved: {output_path}")
+            print(f"JSON summary saved: {output_path}")
 
         return summary
 
@@ -624,7 +603,7 @@ class ReportGenerator:
 
         if output_path:
             plt.savefig(output_path, dpi=150, bbox_inches="tight")
-            print(f"📊 Plot saved: {output_path}")
+            print(f"Plot saved: {output_path}")
         else:
             plt.show()
 
@@ -682,7 +661,7 @@ def compare_and_report(
         generator.generate_comparison_plot(experiment_ids, output_path=str(plot_path))
         outputs["plot"] = str(plot_path)
 
-    print(f"\n✅ Generated {len(outputs)} reports in {output_path}")
+    print(f"\nGenerated {len(outputs)} reports in {output_path}")
     return outputs
 
 

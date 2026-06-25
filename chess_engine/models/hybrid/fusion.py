@@ -38,14 +38,6 @@ class FeatureFusion(nn.Module):
         log_gates: bool = False,
         gate_bias: float = 2.2,
     ):
-        """
-        Args:
-            cnn_feature_size: Channel count coming out of the CNN backbone.
-            rnn_context_size: Size of the RNN context vector.
-            fusion_type: One of "concat", "gated", or "attention".
-            log_gates: If True, emit gate statistics to the module logger at
-                DEBUG level on every forward pass (gated fusion only).
-        """
         super().__init__()
 
         self.fusion_type = fusion_type
@@ -100,8 +92,6 @@ class FeatureFusion(nn.Module):
             pooled = F.adaptive_avg_pool2d(cnn_features, 1).flatten(1)
             gate = self.gate(torch.cat([pooled, rnn_context], dim=1))
 
-            # --- Gate logging (ablation study) ---
-            # gate shape: (batch, cnn_feature_size)
             # Values near 1 → CNN dominates; near 0 → RNN dominates.
             self.last_gate_mean = gate.mean().item()
             if self.log_gates:

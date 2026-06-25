@@ -42,19 +42,7 @@ def _encode_move_histories(
     max_history: int,
     device: torch.device,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Encode a batch of move history lists into padded index tensors.
-
-    Args:
-        move_histories: List of move lists (chess.Move objects or UCI strings).
-        move_encoder: Encodes moves to integer indices.
-        max_history: Pad/truncate each history to this length.
-        device: Target device for output tensors.
-
-    Returns:
-        Tuple of (histories, lengths):
-            histories — LongTensor of shape (batch, max_history)
-            lengths   — LongTensor of shape (batch,) with actual sequence lengths
-    """
+    """Encode a batch of move history lists into padded (batch, max_history) index tensors."""
     tensors = []
     lengths = []
     for moves in move_histories:
@@ -125,30 +113,23 @@ def execute_training_step(
         per_update is None when uniform replay is used; for PER it is a dict
         with 'indices' and 'priorities' for the trainer to push back to the buffer.
     """
-    print(f"\n📚 Training: {config.training_steps_per_iteration} steps...")
+    print(f"\nTraining: {config.training_steps_per_iteration} steps...")
 
     model.train()
 
-    # Shared metric accumulators (populated by whichever training path runs)
     total_loss = 0.0
     total_policy_loss = 0.0
     total_value_loss = 0.0
     num_batches = 0
 
-    # Sanity metrics for value target verification
     mcts_root_values: List[float] = []
     predicted_values: List[float] = []
 
-    # Fusion gate mean — tracks CNN vs RNN contribution per training step.
-    # Only populated when model uses gated fusion (model.fusion.last_gate_mean).
+    # Tracks CNN vs RNN contribution per step; only populated with gated fusion.
     gate_values: List[float] = []
 
-    # Will be populated by the PER path; None signals uniform replay was used.
     per_update = None
 
-    # =========================================================================
-    # PER TRAINING PATH
-    # =========================================================================
     if per_beta is not None:
         # Narrow the type: per_beta is only set when use_prioritized_replay=True,
         # which guarantees the buffer is a PrioritizedReplayBuffer.  The assertion
@@ -166,20 +147,15 @@ def execute_training_step(
         all_priorities: List[float] = []
 
         for _step in range(config.training_steps_per_iteration):
-            # sample() on PrioritizedReplayBuffer returns boards as chess.Board
-            # objects plus IS weights and the buffer indices of each sample.
             batch = replay_buffer.sample(config.batch_size, beta=per_beta)
 
-            # --- encode boards ---
             board_tensors = [board_encoder.board_to_tensor(b) for b in batch["boards"]]
             boards = torch.stack(board_tensors).to(device)
 
-            # --- encode move histories ---
             move_histories_t, hist_lengths_t = _encode_move_histories(
                 batch["move_histories"], move_encoder, config.rnn_max_history, device
             )
 
-            # --- encode policies (dict or pre-encoded tensor) ---
             policy_tensors = []
             for policy in batch["policies"]:
                 p = torch.zeros(move_encoder.num_moves)
@@ -198,7 +174,6 @@ def execute_training_step(
                 policy_tensors.append(p)
             policies = torch.stack(policy_tensors).to(device)
 
-            # --- values and importance-sampling weights ---
             values = (
                 torch.tensor(batch["values"], dtype=torch.float32)
                 .unsqueeze(1)
@@ -209,7 +184,6 @@ def execute_training_step(
             optimizer.zero_grad()
 
             if use_amp:
-                # MIXED PRECISION PATH
                 assert (
                     scaler is not None
                 ), "Scaler must be initialised when use_amp is True"
@@ -244,7 +218,6 @@ def execute_training_step(
                 scaler.update()
 
             else:
-                # STANDARD FP32 PATH
                 policy_logits, value_pred, _ = model(
                     boards, move_histories_t, hist_lengths_t
                 )
@@ -267,7 +240,6 @@ def execute_training_step(
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
-            # Accumulate fusion gate mean (gated fusion only; None otherwise)
             gm = _read_gate_mean(model)
             if gm is not None:
                 gate_values.append(gm)
@@ -280,14 +252,12 @@ def execute_training_step(
             all_indices.extend(batch["indices"])
             all_priorities.extend(new_priorities)
 
-            # --- accumulate metrics ---
             total_loss += loss.item()
             total_policy_loss += policy_loss.item()
             total_value_loss += value_loss.item()
             num_batches += 1
             total_training_steps += 1
 
-            # Sanity metrics
             v_cpu = values.cpu().detach().squeeze()
             mcts_root_values.extend(
                 v_cpu.tolist() if v_cpu.dim() > 0 else [v_cpu.item()]
@@ -297,7 +267,6 @@ def execute_training_step(
                 p_cpu.tolist() if p_cpu.dim() > 0 else [p_cpu.item()]
             )
 
-            # TensorBoard logging
             if total_training_steps % config.log_frequency == 0:
                 writer.add_scalar("train/loss", loss.item(), total_training_steps)
                 writer.add_scalar(
@@ -318,14 +287,9 @@ def execute_training_step(
         pbar.close()
         per_update = {"indices": all_indices, "priorities": all_priorities}
 
-    # =========================================================================
-    # UNIFORM TRAINING PATH  (original DataLoader-based approach)
-    # =========================================================================
     else:
-        # Sample from replay buffer - get all examples
         buffer_examples: List[Any] = replay_buffer.get_all()
 
-        # Determine sample size
         sample_size = min(
             len(buffer_examples),
             int(len(replay_buffer) * config.sample_ratio),
@@ -335,7 +299,7 @@ def execute_training_step(
             indices = np.random.choice(len(buffer_examples), sample_size, replace=False)
             buffer_examples = [buffer_examples[i] for i in indices]
 
-        # Create dataset and dataloader — move history encoded once here, not per step
+        # move history encoded once at dataset construction, not per batch step
         dataset = RLDataset(
             buffer_examples,
             board_encoder,
@@ -359,32 +323,25 @@ def execute_training_step(
 
         for epoch in range(num_epochs):
             for boards, policies, values, move_histories, history_lengths in dataloader:
-                # Move to device
                 boards = boards.to(device)
                 policies = policies.to(device)
                 values = values.to(device)
                 move_histories = move_histories.to(device)
                 history_lengths = history_lengths.to(device)
 
-                # Zero gradients
                 optimizer.zero_grad()
 
-                # Forward pass with optional mixed precision
                 if use_amp:
-                    # MIXED PRECISION PATH
                     assert (
                         scaler is not None
                     ), "Scaler should be initialized when use_amp is True"
 
-                    autocast_context = autocast(device_type=AMP_DEVICE)
-
-                    with autocast_context:
+                    with autocast(device_type=AMP_DEVICE):
                         policy_logits, value_pred, _ = model(
                             boards, move_histories, history_lengths
                         )
 
-                        # Policy loss: Soft cross-entropy for MCTS probability distributions
-                        # Add small epsilon to avoid log(0) numerical issues
+                        # Add small epsilon to avoid log(0)
                         policies_safe = policies + 1e-8
                         policies_safe = policies_safe / policies_safe.sum(
                             dim=1, keepdim=True
@@ -403,25 +360,18 @@ def execute_training_step(
                             + config.value_loss_weight * value_loss
                         )
 
-                    # Backward pass with scaled gradients
                     scaler.scale(loss).backward()
-
-                    # Unscale before gradient clipping
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-                    # Optimizer step with scaler
                     scaler.step(optimizer)
                     scaler.update()
 
                 else:
-                    # STANDARD FP32 PATH (fallback for CPU or when AMP disabled)
                     policy_logits, value_pred, _ = model(
                         boards, move_histories, history_lengths
                     )
 
-                    # Policy loss: Soft cross-entropy for MCTS probability distributions
-                    # Add small epsilon to avoid log(0) numerical issues
+                    # Add small epsilon to avoid log(0)
                     policies_safe = policies + 1e-8
                     policies_safe = policies_safe / policies_safe.sum(
                         dim=1, keepdim=True
@@ -438,46 +388,32 @@ def execute_training_step(
                         + config.value_loss_weight * value_loss
                     )
 
-                    # Backward pass
                     loss.backward()
-
-                    # Gradient clipping
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-                    # Optimizer step
                     optimizer.step()
 
-                # Accumulate fusion gate mean (gated fusion only; None otherwise)
                 gm = _read_gate_mean(model)
                 if gm is not None:
                     gate_values.append(gm)
 
-                # Track metrics
                 total_loss += loss.item()
                 total_policy_loss += policy_loss.item()
                 total_value_loss += value_loss.item()
                 num_batches += 1
                 total_training_steps += 1
 
-                # Collect sanity metrics (for value target verification)
-                # Handle both scalar and tensor cases
                 values_cpu = values.cpu().detach().squeeze()
                 if values_cpu.dim() == 0:
-                    # Scalar tensor
                     mcts_root_values.append(values_cpu.item())
                 else:
-                    # Tensor with multiple values
                     mcts_root_values.extend(values_cpu.tolist())
 
                 pred_cpu = value_pred.cpu().detach().squeeze()
                 if pred_cpu.dim() == 0:
-                    # Scalar tensor
                     predicted_values.append(pred_cpu.item())
                 else:
-                    # Tensor with multiple values
                     predicted_values.extend(pred_cpu.tolist())
 
-                # Log to tensorboard
                 if total_training_steps % config.log_frequency == 0:
                     writer.add_scalar("train/loss", loss.item(), total_training_steps)
                     writer.add_scalar(
@@ -499,7 +435,6 @@ def execute_training_step(
 
                 pbar.update(1)
 
-                # Break if we've done enough steps
                 if num_batches >= config.training_steps_per_iteration:
                     break
 
@@ -508,14 +443,10 @@ def execute_training_step(
 
         pbar.close()
 
-    # =========================================================================
-    # SHARED: compute and log summary metrics
-    # =========================================================================
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
     avg_policy_loss = total_policy_loss / num_batches if num_batches > 0 else 0.0
     avg_value_loss = total_value_loss / num_batches if num_batches > 0 else 0.0
 
-    # Compute sanity metrics for value target verification
     mean_mcts_value = np.mean(mcts_root_values) if mcts_root_values else 0.0
     mean_pred_value = np.mean(predicted_values) if predicted_values else 0.0
     std_mcts_value = np.std(mcts_root_values) if mcts_root_values else 0.0
@@ -523,7 +454,6 @@ def execute_training_step(
     min_mcts_value = np.min(mcts_root_values) if mcts_root_values else 0.0
     max_mcts_value = np.max(mcts_root_values) if mcts_root_values else 0.0
 
-    # Compute correlation (Pearson) between MCTS targets and network predictions
     correlation = 0.0
     if len(mcts_root_values) > 1 and len(predicted_values) > 1:
         mcts_arr = np.array(mcts_root_values)
@@ -550,7 +480,6 @@ def execute_training_step(
         "gate_mean": avg_gate_mean,
     }
 
-    # Log sanity metrics to TensorBoard
     writer.add_scalar("sanity/mean_mcts_value", mean_mcts_value, current_iteration)
     writer.add_scalar("sanity/mean_pred_value", mean_pred_value, current_iteration)
     writer.add_scalar("sanity/std_mcts_value", std_mcts_value, current_iteration)
@@ -561,7 +490,7 @@ def execute_training_step(
     if avg_gate_mean is not None:
         writer.add_scalar("fusion/gate_mean", avg_gate_mean, current_iteration)
 
-    print(f"\n✅ Training complete")
+    print("\nTraining complete")
     print(
         f"   Loss: {avg_loss:.4f} (Policy: {avg_policy_loss:.4f}, Value: {avg_value_loss:.4f})"
     )
@@ -576,10 +505,9 @@ def execute_training_step(
     print(f"      Predictions: mean={mean_pred_value:.4f}, std={std_pred_value:.4f}")
     print(f"      Correlation: {correlation:.4f}")
 
-    # Warning if value targets are collapsing
     if std_mcts_value < 0.01:
         print(
-            f"      ⚠️  WARNING: Value targets have very low variance (std={std_mcts_value:.4f})"
+            f"      WARNING: Value targets have very low variance (std={std_mcts_value:.4f})"
         )
         print(
             f"         This suggests MCTS is producing similar values for all positions."

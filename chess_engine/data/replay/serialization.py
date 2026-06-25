@@ -1,9 +1,9 @@
 """
 REPLAY BUFFER - Serialization Utilities
 
-This module provides standalone save/load functions for replay buffers.
+Standalone save/load functions for replay buffers.
 The main save/load logic lives on the buffer classes themselves.
-Kept for compatibility with ChatGPT's import structure.
+Kept for backward-compatible imports.
 """
 
 import os

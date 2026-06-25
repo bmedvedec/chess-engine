@@ -1,13 +1,8 @@
 """
-CHAPTER 13: HYPERPARAMETER TUNER
-Systematic Hyperparameter Search Implementation
+HYPERPARAMETER TUNER
 
-This module provides:
-- Grid search for exhaustive exploration
-- Random search for efficient sampling
-- Bayesian optimization for informed search
-- Early stopping for poor configurations
-- Integration with experiment tracker
+Systematic search over the hyperparameter space: grid search, random search,
+and Bayesian optimization with early stopping and experiment tracking.
 """
 
 import os
@@ -87,14 +82,7 @@ class TuningConfig:
 
 
 class HyperparameterTuner:
-    """
-    Systematic hyperparameter tuning for the chess engine.
-
-    Supports:
-    - Grid Search: Exhaustive search over parameter grid
-    - Random Search: Efficient random sampling
-    - Bayesian Optimization: Informed search using surrogate model
-    """
+    """Systematic hyperparameter tuning: grid search, random search, or Bayesian optimization."""
 
     def __init__(
         self,
@@ -103,41 +91,26 @@ class HyperparameterTuner:
         base_config: Optional[HyperparameterConfig] = None,
         experiment_tracker: Optional[ExperimentTracker] = None,
     ):
-        """
-        Initialize the hyperparameter tuner.
-
-        Args:
-            tuning_config: Configuration for tuning process
-            search_space: Parameter ranges to search
-            base_config: Base configuration to modify
-            experiment_tracker: Tracker for persistence
-        """
         self.tuning_config = tuning_config
         self.search_space = search_space or get_quick_search_space()
         self.base_config = base_config or HyperparameterConfig()
 
-        # Create output directory
         self.output_dir = Path(tuning_config.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Setup experiment tracker
         if experiment_tracker is None:
             experiment_tracker = ExperimentTracker(
                 base_dir=str(self.output_dir / "experiments")
             )
         self.tracker = experiment_tracker
 
-        # Initialize random state
         self.rng = np.random.RandomState(tuning_config.seed)
 
-        # Track completed trials for Bayesian optimization
         self.completed_configs: List[Dict[str, Any]] = []
         self.completed_scores: List[float] = []
 
-        # Current experiment
         self.experiment: Optional[Experiment] = None
 
-        # Statistics
         self.start_time: Optional[float] = None
         self.best_score: float = (
             float("-inf") if tuning_config.higher_is_better else float("inf")
@@ -469,7 +442,7 @@ class HyperparameterTuner:
             if self.tuning_config.max_total_time and self.start_time is not None:
                 elapsed = time.time() - self.start_time
                 if elapsed > self.tuning_config.max_total_time:
-                    print(f"\n⏱️ Time limit reached ({elapsed/3600:.1f}h)")
+                    print(f"\nTime limit reached ({elapsed/3600:.1f}h)")
                     break
 
             if self.tuning_config.strategy == SearchStrategy.GRID:
@@ -514,7 +487,7 @@ class HyperparameterTuner:
                     self.best_score = score
                     self.best_config = config.copy()
                     print(
-                        f"\n🏆 NEW BEST! {self.tuning_config.primary_metric}: {score:.4f}"
+                        f"\nNew best: {self.tuning_config.primary_metric}: {score:.4f}"
                     )
 
                 print(f"\nTrial {trial_num + 1} Results:")
@@ -522,7 +495,7 @@ class HyperparameterTuner:
                 print(f"  Loss: {result.final_loss:.4f}")
                 print(f"  Time: {result.training_time_seconds/60:.1f}m")
             else:
-                print(f"\n❌ Trial failed: {result.error_message}")
+                print(f"\nTrial failed: {result.error_message}")
 
             trial_num += 1
 
@@ -562,7 +535,7 @@ class HyperparameterTuner:
 
             best_config_path = self.output_dir / "best_config.json"
             self.best_config.save(best_config_path)
-            print(f"\n💾 Best config saved: {best_config_path}")
+            print(f"\nBest config saved: {best_config_path}")
 
         if self.experiment is not None:
             report_path = self.output_dir / "tuning_report.txt"
@@ -764,4 +737,4 @@ if __name__ == "__main__":
     )
 
     experiment = tuner.run(experiment_name=f"{args.strategy}_search")
-    print(f"\n✅ Tuning complete! Experiment: {experiment.experiment_id}")
+    print(f"\nTuning complete. Experiment: {experiment.experiment_id}")

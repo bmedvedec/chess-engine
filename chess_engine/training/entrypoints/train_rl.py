@@ -169,12 +169,9 @@ def main():
         **({"buffer_size": args.buffer_size} if args.buffer_size is not None else {}),
     )
 
-    # Create trainer
     trainer = RLTrainer(
         config=config, resume_from=args.resume, pretrained_path=args.pretrained_model
     )
-
-    # Start training
     trainer.train()
 
 

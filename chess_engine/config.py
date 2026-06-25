@@ -44,7 +44,6 @@ DATA_DIR = PROJECT_ROOT / "data"
 MODEL_DIR = PROJECT_ROOT / "data" / "models"
 LOG_DIR = PROJECT_ROOT / "logs"
 
-# Ensure directories exist
 for directory in [DATA_DIR, MODEL_DIR, LOG_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -55,7 +54,7 @@ for directory in [DATA_DIR, MODEL_DIR, LOG_DIR]:
 HARDWARE_CONFIG = {
     # GPU Settings (GTX 1070 Ti - 8GB VRAM, Pascal architecture)
     "device": DEVICE,
-    "mixed_precision": True,  # ✅ Enable AMP (20-30% memory savings)
+    "mixed_precision": True,  # Enable AMP (20-30% memory savings)
     "pin_memory": True,  # Faster data transfer to GPU
     "non_blocking": True,  # Async data transfer
     # Batch sizes optimized for 8GB VRAM with mixed precision
@@ -222,39 +221,35 @@ def setup_training_device():
     device = torch.device(HARDWARE_CONFIG["device"])
 
     if device.type == "cuda":
-        # Enable cuDNN optimizations
         torch.backends.cudnn.benchmark = HARDWARE_CONFIG["cudnn_benchmark"]
         torch.backends.cudnn.deterministic = HARDWARE_CONFIG["cudnn_deterministic"]
 
-        # Set memory fraction if specified
         if HARDWARE_CONFIG.get("gpu_memory_fraction"):
             torch.cuda.set_per_process_memory_fraction(
                 HARDWARE_CONFIG["gpu_memory_fraction"]
             )
 
-        # Print GPU info
-        print(f"🎮 GPU: {torch.cuda.get_device_name(0)}")
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(
-            f"💾 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.1f} GB"
+            f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.1f} GB"
         )
         print(
-            f"⚡ Mixed Precision (AMP): {'Enabled' if HARDWARE_CONFIG['mixed_precision'] else 'Disabled'}"
+            f"Mixed Precision (AMP): {'Enabled' if HARDWARE_CONFIG['mixed_precision'] else 'Disabled'}"
         )
-        print(f"🔧 CUDA Version: {torch.version.cuda}")
+        print(f"CUDA Version: {torch.version.cuda}")
 
-        # Check compute capability
         compute_cap = torch.cuda.get_device_capability(0)
-        print(f"📊 Compute Capability: {compute_cap[0]}.{compute_cap[1]}")
+        print(f"Compute Capability: {compute_cap[0]}.{compute_cap[1]}")
 
         # GTX 1070 Ti is Pascal (6.1) - confirm AMP support
         if compute_cap[0] >= 6:
-            print(f"✅ AMP supported (Compute Capability >= 6.0)")
+            print("AMP supported (Compute Capability >= 6.0)")
         else:
-            print(f"⚠️  AMP may not work optimally (Compute Capability < 6.0)")
+            print("Warning: AMP may not work optimally (Compute Capability < 6.0)")
             HARDWARE_CONFIG["mixed_precision"] = False
     else:
-        print("⚠️  Training on CPU (slower)")
-        HARDWARE_CONFIG["mixed_precision"] = False  # Disable AMP on CPU
+        print("Training on CPU (slower)")
+        HARDWARE_CONFIG["mixed_precision"] = False
 
     return device
 
@@ -274,37 +269,33 @@ def print_system_info():
     print("SYSTEM INFORMATION")
     print("=" * 70)
 
-    # OS
-    print(f"\n🖥️  Operating System: {platform.system()} {platform.release()}")
-    print(f"🏗️  Architecture: {platform.machine()}")
+    print(f"\nOperating System: {platform.system()} {platform.release()}")
+    print(f"Architecture: {platform.machine()}")
 
-    # CPU
-    print(f"\n⚙️  CPU: {platform.processor()}")
-    print(f"🔢 CPU Cores: {multiprocessing.cpu_count()} logical threads")
+    print(f"\nCPU: {platform.processor()}")
+    print(f"CPU Cores: {multiprocessing.cpu_count()} logical threads")
 
     if has_psutil:
-        print(f"💾 RAM: {psutil.virtual_memory().total / (1024**3):.1f} GB")
+        print(f"RAM: {psutil.virtual_memory().total / (1024**3):.1f} GB")
 
-    # GPU
     if torch.cuda.is_available():
-        print(f"\n🎮 GPU: {torch.cuda.get_device_name(0)}")
+        print(f"\nGPU: {torch.cuda.get_device_name(0)}")
         print(
-            f"💾 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.1f} GB"
+            f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.1f} GB"
         )
-        print(f"🔧 CUDA Version: {torch.version.cuda}")
+        print(f"CUDA Version: {torch.version.cuda}")
 
         if torch.backends.cudnn.enabled:
-            print(f"⚡ cuDNN Version: {torch.backends.cudnn.version()}")
+            print(f"cuDNN Version: {torch.backends.cudnn.version()}")
 
         compute_cap = torch.cuda.get_device_capability(0)
-        print(f"📊 Compute Capability: {compute_cap[0]}.{compute_cap[1]}")
+        print(f"Compute Capability: {compute_cap[0]}.{compute_cap[1]}")
     else:
-        print("\n⚠️  No GPU detected - training will be slow!")
+        print("\nNo GPU detected - training will be slow!")
 
-    # PyTorch
-    print(f"\n🔥 PyTorch Version: {torch.__version__}")
+    print(f"\nPyTorch Version: {torch.__version__}")
     print(
-        f"🎯 Mixed Precision (AMP): {'Available' if torch.cuda.is_available() else 'Not Available (CPU)'}"
+        f"Mixed Precision (AMP): {'Available' if torch.cuda.is_available() else 'Not Available (CPU)'}"
     )
 
     print("=" * 70)

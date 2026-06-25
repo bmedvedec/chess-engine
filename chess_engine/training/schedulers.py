@@ -12,18 +12,7 @@ def create_warmup_scheduler(
     optimizer: torch.optim.Optimizer,
     warmup_epochs: int = 2,
 ) -> LambdaLR:
-    """
-    Create a warmup learning rate scheduler.
-
-    Linearly increases learning rate from 0 to base LR over warmup_epochs.
-
-    Args:
-        optimizer: PyTorch optimizer
-        warmup_epochs: Number of warmup epochs (default: 2)
-
-    Returns:
-        LambdaLR scheduler for warmup
-    """
+    """Linearly increases LR from 0 to base LR over warmup_epochs."""
 
     def warmup_lambda(epoch):
         if epoch < warmup_epochs:
@@ -39,20 +28,7 @@ def create_plateau_scheduler(
     patience: int = 3,
     min_lr: float = 1e-7,
 ) -> ReduceLROnPlateau:
-    """
-    Create a ReduceLROnPlateau scheduler.
-
-    Reduces learning rate when validation loss plateaus.
-
-    Args:
-        optimizer: PyTorch optimizer
-        factor: Factor to reduce LR by (default: 0.5)
-        patience: Epochs to wait before reducing (default: 3)
-        min_lr: Minimum learning rate (default: 1e-7)
-
-    Returns:
-        ReduceLROnPlateau scheduler
-    """
+    """ReduceLROnPlateau: halve LR after `patience` epochs without improvement."""
     return ReduceLROnPlateau(
         optimizer, mode="min", factor=factor, patience=patience, min_lr=min_lr
     )

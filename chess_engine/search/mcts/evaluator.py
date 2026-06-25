@@ -89,7 +89,7 @@ class Evaluator:
                 actual_length = max(
                     1, min(len(board.move_stack), self.history_encoder.max_length)
                 )
-                seq_length = torch.LongTensor([actual_length])
+                seq_length = torch.LongTensor([actual_length]).to(self.device)
 
                 policy_logits, value, _ = self.model(
                     board_tensor, move_history, seq_length
@@ -152,7 +152,7 @@ class Evaluator:
                     seq_lengths.append(actual_length)
 
                 move_histories = torch.stack(move_histories).to(self.device)
-                seq_lengths = torch.LongTensor(seq_lengths)
+                seq_lengths = torch.LongTensor(seq_lengths).to(self.device)
 
                 policy_logits, values, _ = self.model(
                     board_tensors, move_histories, seq_lengths

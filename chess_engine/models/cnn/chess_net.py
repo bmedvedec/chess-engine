@@ -16,18 +16,7 @@ from chess_engine.models.cnn.utils import count_parameters
 
 
 class ChessNet(nn.Module):
-    """
-    Complete chess neural network combining CNN backbone with policy and value heads.
-
-    This is the main model that will be trained. It takes a board position
-    and outputs:
-    1. Policy: Probability distribution over moves
-    2. Value: Evaluation of the position
-
-    Usage:
-        model = ChessNet()
-        policy_logits, value = model(board_tensor)
-    """
+    """CNN backbone with policy and value heads for chess position evaluation."""
 
     def __init__(
         self,
@@ -38,26 +27,13 @@ class ChessNet(nn.Module):
         dropout: float = 0.0,
         device: Optional[Union[str, torch.device]] = None,
     ):
-        """
-        Initialize complete chess network.
-
-        Args:
-            input_channels: Number of input channels (default: 22)
-            num_filters: Number of CNN filters (default: 256)
-            num_residual_blocks: Number of residual blocks (default: 10)
-            num_actions: Number of possible moves (default: 4672)
-            dropout: Dropout probability (default: 0.0)
-            device: Device to use ('cuda' or 'cpu', auto-detect if None)
-        """
         super().__init__()
 
-        # Set device
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
 
-        # CNN backbone
         self.backbone = ChessCNN(
             input_channels=input_channels,
             num_filters=num_filters,
@@ -65,37 +41,19 @@ class ChessNet(nn.Module):
             dropout=dropout,
         )
 
-        # Policy head
         self.policy_head = PolicyHead(
             input_channels=num_filters, num_actions=num_actions
         )
 
-        # Value head
         self.value_head = ValueHead(input_channels=num_filters)
 
-        # Move to device
         self.to(self.device)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Forward pass through complete network.
-
-        Args:
-            x: Board tensor of shape (batch, 22, 8, 8)
-
-        Returns:
-            Tuple of (policy_logits, value):
-            - policy_logits: shape (batch, num_actions)
-            - value: shape (batch, 1) in range [-1, 1]
-        """
-        # Ensure input is on correct device
         if x.device != self.device:
             x = x.to(self.device)
 
-        # Extract features with CNN backbone
         features = self.backbone(x)
-
-        # Get policy and value predictions
         policy_logits = self.policy_head(features)
         value = self.value_head(features)
 
@@ -103,17 +61,7 @@ class ChessNet(nn.Module):
 
     @torch.no_grad()
     def predict(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Prediction with softmax applied to policy (for inference).
-
-        Args:
-            x: Board tensor of shape (batch, 22, 8, 8)
-
-        Returns:
-            Tuple of (policy_probs, value):
-            - policy_probs: shape (batch, num_actions), sums to 1.0
-            - value: shape (batch, 1) in range [-1, 1]
-        """
+        """Inference: forward pass with softmax applied to policy logits."""
         self.eval()
 
         policy_logits, value = self.forward(x)
@@ -122,12 +70,6 @@ class ChessNet(nn.Module):
         return policy_probs, value
 
     def save(self, path: str):
-        """
-        Save model checkpoint.
-
-        Args:
-            path: Path to save checkpoint
-        """
         checkpoint = {
             "state_dict": self.state_dict(),
             "config": {
@@ -142,16 +84,6 @@ class ChessNet(nn.Module):
 
     @classmethod
     def load(cls, path: str, device: Optional[str] = None) -> "ChessNet":
-        """
-        Load model from checkpoint.
-
-        Args:
-            path: Path to checkpoint
-            device: Device to load to (auto-detect if None)
-
-        Returns:
-            Loaded ChessNet model
-        """
         checkpoint = torch.load(path, map_location="cpu")
         config = checkpoint["config"]
 

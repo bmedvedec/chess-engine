@@ -33,18 +33,9 @@ from chess_engine.utils.move_encoder import MoveEncoder
 
 
 def load_chunked_data(chunk_dir: str) -> list:
-    """
-    Load all chunks from a directory and combine them.
-
-    Args:
-        chunk_dir: Directory containing chunk_XXXX.pkl files
-
-    Returns:
-        Combined list of all examples from all chunks
-    """
+    """Load and concatenate all chunk_*.pkl files from chunk_dir."""
     print(f"\nLoading chunked data from: {chunk_dir}")
 
-    # Find all chunk files
     chunk_pattern = os.path.join(chunk_dir, "chunk_*.pkl")
     chunk_files = sorted(glob.glob(chunk_pattern))
 
@@ -53,7 +44,6 @@ def load_chunked_data(chunk_dir: str) -> list:
 
     print(f"   Found {len(chunk_files)} chunk files")
 
-    # Load all chunks
     all_examples = []
 
     with tqdm(total=len(chunk_files), desc="Loading chunks", unit="chunk") as pbar:
@@ -73,9 +63,7 @@ def load_chunked_data(chunk_dir: str) -> list:
 
 
 def main():
-    """Main training script."""
     parser = argparse.ArgumentParser(description="Train chess engine")
-    # Required arguments
     parser.add_argument(
         "--data",
         type=str,
@@ -87,7 +75,6 @@ def main():
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
     parser.add_argument("--val-split", type=float, default=0.1, help="Validation split")
 
-    # Model architecture arguments
     parser.add_argument(
         "--cnn-blocks", type=int, default=10, help="Number of CNN residual blocks"
     )
@@ -121,7 +108,6 @@ def main():
         "--checkpoint", type=str, default=None, help="Resume from checkpoint"
     )
 
-    # Training options
     parser.add_argument(
         "--no-mixed-precision",
         action="store_true",
@@ -151,37 +137,29 @@ def main():
 
     args = parser.parse_args()
 
-    # Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Load data
     print(f"\nLoading data from: {args.data}")
 
-    # Check if input is a directory (chunked) or file (single dataset)
     if os.path.isdir(args.data):
-        # Chunked data - load all chunks
         examples = load_chunked_data(args.data)
     else:
-        # Single file
         examples = load_dataset(args.data)
 
-    # Split train/val using split_examples for proper shuffling and reproducibility
     train_examples, val_examples = split_examples(
         examples,
         train_ratio=1.0 - args.val_split,
         shuffle=True,
-        seed=42,  # Reproducibility
+        seed=42,
     )
 
     print(f"Training examples: {len(train_examples):,}")
     print(f"Validation examples: {len(val_examples):,}")
 
-    # Create datasets
     board_encoder = BoardEncoder()
     move_encoder = MoveEncoder()
 
-    # Training dataset: Enable caching and augmentation
     train_dataset = ChessDataset(
         train_examples,
         board_encoder,
@@ -190,7 +168,6 @@ def main():
         augment=True,
     )
 
-    # Validation dataset: Enable caching, disable augmentation
     val_dataset = ChessDataset(
         val_examples,
         board_encoder,
@@ -199,8 +176,7 @@ def main():
         augment=False,
     )
 
-    # Create dataloaders
-    # Note: num_workers=0 on Windows to avoid multiprocessing issues with cached tensors
+    # num_workers=0 on Windows to avoid multiprocessing issues with cached tensors
     train_loader = create_dataloader(
         train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0
     )
@@ -208,22 +184,17 @@ def main():
         val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0
     )
 
-    # Create model
-    print(f"\nCreating model...")
+    print("\nCreating model...")
     model = HybridChessNet(
         config=HybridModelConfig(
-            # CNN parameters
             cnn_residual_blocks=args.cnn_blocks,
             cnn_filters=args.cnn_filters,
             cnn_dropout=args.cnn_dropout,
-            # RNN parameters
             rnn_hidden_size=args.rnn_hidden_size,
             rnn_num_layers=args.rnn_layers,
             rnn_dropout=args.rnn_dropout,
             rnn_use_attention=args.rnn_attention,
-            # Fusion parameters
             fusion_type=args.fusion_type,
-            # Mode
             use_rnn=args.use_rnn,
         )
     )
@@ -236,7 +207,6 @@ def main():
         print(f"  Fusion: {args.fusion_type}")
     print(f"Parameters: {count_parameters(model):,}")
 
-    # Create trainer
     trainer = ChessTrainer(
         model=model,
         train_loader=train_loader,
@@ -251,16 +221,13 @@ def main():
         gradient_accumulation_steps=args.grad_accum,
     )
 
-    # Resume from checkpoint if provided
     if args.checkpoint:
         trainer.load_checkpoint(args.checkpoint)
 
-    # Train
     trainer.train(num_epochs=args.epochs)
 
 
 if __name__ == "__main__":
-    # If run without arguments, use test mode
     if len(sys.argv) == 1:
         print("Running in TEST mode with sample data...")
         print(
@@ -268,7 +235,6 @@ if __name__ == "__main__":
         )
         print("\nTesting with sample data...")
 
-        # Create sample data if needed
         from chess_engine.data.dataset import (
             ChessGameParser,
             save_dataset,
@@ -282,7 +248,6 @@ if __name__ == "__main__":
             examples = parser.parse_pgn_file(pgn_path)
             save_dataset(examples, data_path)
 
-        # Test training with sample data
         sys.argv = [
             "train_supervised.py",
             "--data",

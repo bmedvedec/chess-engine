@@ -11,16 +11,7 @@ from typing import Dict, Optional
 
 
 class MCTSNode:
-    """
-    Node in the Monte Carlo Tree Search.
-
-    Each node represents a board position and stores:
-    - Visit count: How many times we've explored this position
-    - Value sum: Accumulated value from simulations
-    - Prior: Policy network's initial probability
-    - Children: Child nodes (one per legal move)
-    - Virtual loss: For parallel search support
-    """
+    """MCTS tree node: board state, visit statistics, prior probability, and children."""
 
     def __init__(
         self,
@@ -29,36 +20,19 @@ class MCTSNode:
         move: Optional[chess.Move] = None,
         prior: float = 0.0,
     ):
-        """
-        Initialize MCTS node.
-
-        Args:
-            board: Chess board state
-            parent: Parent node
-            move: Move that led to this node
-            prior: Prior probability from policy network
-        """
         self.board = board
         self.parent = parent
         self.move = move
         self.prior = prior
 
-        # Statistics
         self.visit_count = 0
         self.value_sum = 0.0
-        self.virtual_loss = 0  # For parallel search
+        self.virtual_loss = 0  # for parallel search
 
-        # Children nodes
         self.children: Dict[chess.Move, MCTSNode] = {}
         self.is_expanded = False
 
     def value(self) -> float:
-        """
-        Average value of this node.
-
-        Returns:
-            Mean value from all simulations through this node
-        """
         if self.visit_count == 0:
             return 0.0
 
@@ -70,32 +44,12 @@ class MCTSNode:
     def ucb_score(
         self, c_puct: float = 1.5, parent_visit_count: Optional[int] = None
     ) -> float:
-        """
-        Upper Confidence Bound score for node selection.
-
-        Formula: Q(s,a) + c_puct * P(s,a) * sqrt(N(s)) / (1 + N(s,a))
-
-        Where:
-        - Q(s,a): Average value (exploitation)
-        - P(s,a): Prior probability from policy
-        - N(s): Parent visit count
-        - N(s,a): This node's visit count
-        - c_puct: Exploration constant (higher = more exploration)
-
-        Args:
-            c_puct: Exploration constant (default: 1.5)
-            parent_visit_count: Parent's visit count
-
-        Returns:
-            UCB score for this node
-        """
+        """PUCT: Q(s,a) + c_puct * P(s,a) * sqrt(N(s)) / (1 + N(s,a))"""
         if parent_visit_count is None:
             parent_visit_count = self.parent.visit_count if self.parent else 1
 
-        # Exploitation term: average value
         q_value = self.value()
 
-        # Exploration term: balances exploration vs exploitation
         exploration = (
             c_puct
             * self.prior
@@ -106,15 +60,7 @@ class MCTSNode:
         return q_value + exploration
 
     def select_child(self, c_puct: float = 1.5) -> "MCTSNode":
-        """
-        Select best child using UCB formula.
-
-        Args:
-            c_puct: Exploration constant
-
-        Returns:
-            Child node with highest UCB score
-        """
+        """Return child with highest PUCT score."""
         best_score = -float("inf")
         best_child: Optional["MCTSNode"] = None
 
@@ -140,13 +86,6 @@ class MCTSNode:
     def expand(
         self, policy_probs: Dict[chess.Move, float], progressive: bool = False
     ) -> None:
-        """
-        Expand node by adding children for all legal moves.
-
-        Args:
-            policy_probs: Policy probabilities from neural network
-            progressive: If True, use progressive widening (expand top moves first)
-        """
         if self.is_expanded:
             return
 
@@ -164,14 +103,11 @@ class MCTSNode:
             moves_to_expand = policy_probs.keys()
 
         for move in moves_to_expand:
-            # Create child board
             child_board = self.board.copy()
             child_board.push(move)
 
-            # Get prior probability
-            prior = policy_probs.get(move, 1e-8)  # Small value if not in policy
+            prior = policy_probs.get(move, 1e-8)
 
-            # Create child node
             self.children[move] = MCTSNode(
                 board=child_board, parent=self, move=move, prior=prior
             )
@@ -179,12 +115,6 @@ class MCTSNode:
         self.is_expanded = True
 
     def update(self, value: float) -> None:
-        """
-        Update node statistics after simulation.
-
-        Args:
-            value: Value from simulation (from perspective of player to move)
-        """
         self.visit_count += 1
         self.value_sum += value
 

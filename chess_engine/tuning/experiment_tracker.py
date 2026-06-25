@@ -1,13 +1,8 @@
 """
-CHAPTER 13: EXPERIMENT TRACKING
-Comprehensive Experiment Tracking and Comparison System
+EXPERIMENT TRACKING
 
-This module provides:
-- Experiment logging with full configuration capture
-- Result persistence and retrieval
-- Comparison across experiments
-- Performance visualization
-- Report generation
+Experiment logging with full configuration capture, result persistence,
+cross-experiment comparison, visualization, and report generation.
 """
 
 import json
@@ -182,15 +177,7 @@ class Experiment:
 
 
 class ExperimentTracker:
-    """
-    Tracks and manages hyperparameter tuning experiments.
-
-    Features:
-    - Persistent storage of experiments and results
-    - Comparison across experiments
-    - Visualization of results
-    - Report generation
-    """
+    """Tracks and manages hyperparameter tuning experiments with persistent storage."""
 
     def __init__(self, base_dir: str = "data/experiments"):
         """
@@ -264,7 +251,7 @@ class ExperimentTracker:
         self.index[experiment_id] = name
         self._save_index()
 
-        print(f"✅ Created experiment: {name} ({experiment_id})")
+        print(f"Created experiment: {name} ({experiment_id})")
         return experiment
 
     def save_experiment(self, experiment: Experiment) -> None:
@@ -553,7 +540,7 @@ class ExperimentTracker:
         if output_path:
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(report)
-            print(f"📃 Report saved: {output_path}")
+            print(f"Report saved: {output_path}")
 
         return report
 
@@ -572,7 +559,7 @@ class ExperimentTracker:
             save_path: Optional path to save plot
         """
         if not HAS_MATPLOTLIB:
-            print("⚠️  matplotlib not available for plotting")
+            print("matplotlib not available for plotting")
             return
 
         experiment = self.load_experiment(experiment_id)
@@ -648,7 +635,7 @@ class ExperimentTracker:
 
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches="tight")
-            print(f"📊 Plot saved: {save_path}")
+            print(f"Plot saved: {save_path}")
         else:
             plt.show()
 
@@ -750,7 +737,7 @@ class ExperimentTracker:
 
             if save_path:
                 plt.savefig(save_path, dpi=150, bbox_inches="tight")
-                print(f"📊 Importance plot saved: {save_path}")
+                print(f"Importance plot saved: {save_path}")
             else:
                 plt.show()
 

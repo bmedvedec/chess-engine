@@ -20,27 +20,22 @@ class SelfPlayStatistics:
 
     @property
     def avg_moves_per_game(self) -> float:
-        """Average moves per game."""
         return self.total_moves / self.total_games if self.total_games > 0 else 0.0
 
     @property
     def white_win_rate(self) -> float:
-        """White win percentage."""
         return self.white_wins / self.total_games * 100 if self.total_games > 0 else 0.0
 
     @property
     def black_win_rate(self) -> float:
-        """Black win percentage."""
         return self.black_wins / self.total_games * 100 if self.total_games > 0 else 0.0
 
     @property
     def draw_rate(self) -> float:
-        """Draw percentage."""
         return self.draws / self.total_games * 100 if self.total_games > 0 else 0.0
 
     @property
     def resignation_rate(self) -> float:
-        """Resignation percentage."""
         return (
             self.resignations / self.total_games * 100 if self.total_games > 0 else 0.0
         )
@@ -48,7 +43,6 @@ class SelfPlayStatistics:
     def update(
         self, result: str, num_examples: int, num_moves: int, resigned: bool = False
     ):
-        """Update statistics with game result."""
         self.total_games += 1
         self.total_examples += num_examples
         self.total_moves += num_moves
@@ -64,7 +58,6 @@ class SelfPlayStatistics:
             self.draws += 1
 
     def print_summary(self):
-        """Print statistics summary."""
         print(f"\nSelf-Play Statistics:")
         print(f"   Total games: {self.total_games}")
         print(f"   Total examples: {self.total_examples}")

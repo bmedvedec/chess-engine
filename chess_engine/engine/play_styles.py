@@ -1,15 +1,8 @@
 """
 Play Style System for Chess Engine
 
-This module provides different playing personalities for the chess engine,
-allowing it to play aggressively, defensively, or positionally based on
-configuration.
-
-Each style affects:
-- MCTS exploration (c_puct parameter)
-- Move selection temperature
-- Position evaluation weights
-- Tactical vs positional preference
+Different playing personalities that modify MCTS exploration, move selection
+temperature, and position evaluation weights.
 """
 
 from typing import Dict, Any, Optional
@@ -27,14 +20,7 @@ class StyleType(Enum):
 
 
 class PlayStyle:
-    """
-    Defines different playing personalities for the chess engine.
-
-    Each style modifies engine behavior through:
-    - MCTS parameters (exploration vs exploitation)
-    - Move selection randomness
-    - Position evaluation biases
-    """
+    """Configurable playing personality: MCTS parameters, temperature, and evaluation biases."""
 
     # Style definitions with their parameters
     STYLES = {
@@ -127,111 +113,60 @@ class PlayStyle:
     }
 
     def __init__(self, style: StyleType = StyleType.BALANCED):
-        """
-        Initialize a play style.
-
-        Args:
-            style: The style type to use
-        """
         self.style_type = style
         self.config = self.STYLES[style].copy()
 
     @classmethod
     def from_string(cls, style_name: str) -> "PlayStyle":
-        """
-        Create style from string name.
-
-        Args:
-            style_name: Name of style (case-insensitive)
-
-        Returns:
-            PlayStyle instance
-        """
+        """Create a PlayStyle from a case-insensitive name string; defaults to BALANCED."""
         style_name = style_name.lower()
         for style_type in StyleType:
             if style_type.value == style_name:
                 return cls(style_type)
-
-        # Default to balanced if unknown
         return cls(StyleType.BALANCED)
 
     def get_temperature(self, move_number: int) -> float:
-        """
-        Get move selection temperature based on game phase.
-
-        Args:
-            move_number: Current move number
-
-        Returns:
-            Temperature value for move selection
-        """
-        # Transition from opening temperature to endgame temperature
+        """Return move selection temperature interpolated from opening to endgame phase."""
         if move_number < 15:
-            # Opening: use full style temperature
             return self.config["mcts_temperature"]
         elif move_number < 40:
-            # Middlegame: gradual transition
             progress = (move_number - 15) / 25.0
             opening_temp = self.config["mcts_temperature"]
             endgame_temp = self.config["endgame_temperature"]
             return opening_temp * (1 - progress) + endgame_temp * progress
         else:
-            # Endgame: use endgame temperature
             return self.config["endgame_temperature"]
 
     def get_mcts_params(self) -> Dict[str, float]:
-        """
-        Get MCTS parameters for this style.
-
-        Returns:
-            Dictionary of MCTS parameters
-        """
         return {
             "c_puct": self.config["mcts_c_puct"],
             "temperature": self.config["temperature"],
         }
 
     def evaluate_position_bonus(self, board: chess.Board) -> float:
-        """
-        Calculate position evaluation bonus based on style preferences.
-
-        This modifies the neural network's evaluation to match the style.
-
-        Args:
-            board: Current chess position
-
-        Returns:
-            Bonus/penalty value (-1 to +1)
-        """
+        """Style-weighted position bonus in [-1, 1] to bias neural network evaluation."""
         bonus = 0.0
         weights = self.config["weights"]
 
-        # Material counting
         material_score = self._evaluate_material(board)
         bonus += material_score * weights["material"] * 0.1
 
-        # King safety
         king_safety = self._evaluate_king_safety(board)
         bonus += king_safety * weights["king_safety"] * 0.15
 
-        # Center control
         center_control = self._evaluate_center(board)
         bonus += center_control * weights["center_control"] * 0.1
 
-        # Development
         development = self._evaluate_development(board)
         bonus += development * weights["development"] * 0.1
 
-        # Pawn structure
         pawn_structure = self._evaluate_pawns(board)
         bonus += pawn_structure * weights["pawn_structure"] * 0.1
 
-        # Attack potential
         if self.config.get("prefer_attacks"):
             attack_score = self._evaluate_attacks(board)
             bonus += attack_score * weights["attack"] * 0.15
 
-        # Normalize to [-1, 1] range
         return max(-1.0, min(1.0, bonus))
 
     def _evaluate_material(self, board: chess.Board) -> float:
@@ -607,4 +542,4 @@ if __name__ == "__main__":
         bonus = style.evaluate_position_bonus(board)
         print(f"{style.config['name']:12s}: Position bonus = {bonus:+.3f}")
 
-    print("\n✓ All tests passed!")
+    print("\nAll tests passed.")
